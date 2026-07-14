@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from aivp.api.deps import get_db, get_settings
@@ -76,11 +77,43 @@ def create_export(
         raise HTTPException(status_code=404, detail="Story bible not available yet")
     bible = merge_bible(auto, overlay)
     version = int(project.export_version or 0) + 1
-    written = export_version(paths.exports_dir, bible, version)
+    export_version(paths.exports_dir, bible, version)
     project.export_version = version
     db.commit()
     return {
         "version": version,
-        "json": str(written["json"]),
-        "md": str(written["md"]),
+        "json_url": f"/api/projects/{project_id}/exports/{version}/json",
+        "md_url": f"/api/projects/{project_id}/exports/{version}/md",
     }
+
+
+def _export_file(paths: ProjectPaths, version: int, ext: str) -> FileResponse:
+    path = paths.exports_dir / f"story_bible.v{version:03d}.{ext}"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Export v{version:03d} not found")
+    media_type = "application/json" if ext == "json" else "text/markdown"
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@router.get("/projects/{project_id}/exports/{version}/json")
+def get_export_json(
+    project_id: str,
+    version: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    _require_project(db, project_id)
+    paths = ProjectPaths(settings.data_root, project_id)
+    return _export_file(paths, version, "json")
+
+
+@router.get("/projects/{project_id}/exports/{version}/md")
+def get_export_md(
+    project_id: str,
+    version: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    _require_project(db, project_id)
+    paths = ProjectPaths(settings.data_root, project_id)
+    return _export_file(paths, version, "md")

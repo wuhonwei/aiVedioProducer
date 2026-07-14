@@ -35,16 +35,16 @@ export function ExportPage({ projectId }: Props) {
           <p>版本：v{String(result.version).padStart(3, "0")}</p>
           <ul>
             <li>
-              <a href={result.json} download>
+              <a href={result.json_url} download>
                 下载 JSON
               </a>
-              <span> — {result.json}</span>
+              <span> — {result.json_url}</span>
             </li>
             <li>
-              <a href={result.md} download>
+              <a href={result.md_url} download>
                 下载 Markdown
               </a>
-              <span> — {result.md}</span>
+              <span> — {result.md_url}</span>
             </li>
           </ul>
         </div>

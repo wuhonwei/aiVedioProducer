@@ -21,8 +21,8 @@ export type Job = {
 
 export type ExportResult = {
   version: number;
-  json: string;
-  md: string;
+  json_url: string;
+  md_url: string;
 };
 
 export type OllamaHealth = {
