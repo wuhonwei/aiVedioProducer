@@ -53,4 +53,35 @@ describe("PipelinePage", () => {
       expect(screen.getByText(/3\s*\/\s*10|3\/10/)).toBeInTheDocument();
     });
   });
+
+  it("stops polling when getJob returns step_failed", async () => {
+    vi.mocked(api.getJob).mockResolvedValue({
+      id: "j1",
+      project_id: "p1",
+      status: "step_failed",
+      current_step: "04_extract",
+      chunks_done: 3,
+      chunks_total: 10,
+      error_message: "extract failed",
+    });
+
+    render(<PipelinePage projectId="p1" />);
+    fireEvent.click(screen.getByRole("button", { name: /启动|开始/ }));
+
+    await waitFor(() => {
+      expect(api.startJob).toHaveBeenCalledWith("p1", undefined);
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await waitFor(() => {
+      expect(screen.getByText(/step_failed/)).toBeInTheDocument();
+    });
+
+    const callsAfterTerminal = vi.mocked(api.getJob).mock.calls.length;
+    expect(callsAfterTerminal).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(vi.mocked(api.getJob).mock.calls.length).toBe(callsAfterTerminal);
+  });
 });

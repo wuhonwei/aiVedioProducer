@@ -34,7 +34,11 @@ export function PipelinePage({ projectId }: Props) {
         try {
           const j = await getJob(projectId, jobId);
           setJob(j);
-          if (j.status === "succeeded" || j.status === "failed") {
+          if (
+            j.status === "succeeded" ||
+            j.status === "failed" ||
+            j.status === "step_failed"
+          ) {
             stopPolling();
           }
           if (j.error_message) {
@@ -68,7 +72,11 @@ export function PipelinePage({ projectId }: Props) {
       const j = await startJob(projectId, undefined);
       setJob(j);
       if (j.error_message) setError(j.error_message);
-      if (j.status !== "succeeded" && j.status !== "failed") {
+      if (
+        j.status !== "succeeded" &&
+        j.status !== "failed" &&
+        j.status !== "step_failed"
+      ) {
         pollJob(j.id);
       }
     } catch (e) {
