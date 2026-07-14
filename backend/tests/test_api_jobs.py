@@ -53,3 +53,27 @@ def test_health_ollama_endpoint(tmp_path):
     body = r.json()
     assert "ok" in body
     assert isinstance(body["ok"], bool)
+
+
+def test_force_enrich_defaults_resume_step(tmp_path):
+    app = create_app(Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path/'b.db'}"))
+    app.state.run_jobs_inline = True
+    app.state.llm = FakeLlm(default=FAKE_EXTRACT)
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"name": "enrich"}).json()["id"]
+    client.post(
+        f"/api/projects/{pid}/source",
+        files={"file": ("book.txt", SAMPLE.encode("utf-8"), "text/plain")},
+    )
+    # First full run
+    first = client.post(f"/api/projects/{pid}/jobs", json={})
+    assert first.status_code == 201
+    # Force enrich-only relaunch
+    second = client.post(
+        f"/api/projects/{pid}/jobs",
+        json={"force_enrich": True},
+    )
+    assert second.status_code == 201
+    body = second.json()
+    assert body["force_enrich"] is True
+    assert body["resume_from_step"] == "06_enrich_assets"

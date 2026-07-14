@@ -12,3 +12,9 @@ class Settings(BaseSettings):
     chunk_overlap: int = 150
     extract_max_retries: int = 2
     skip_bad_chunks: bool = True
+    enrich_top_characters: int = 8
+    enrich_top_locations: int = 8
+    enrich_top_props: int = 6
+    enrich_top_factions: int = 4
+    enrich_strict: bool = False
+    enrich_force: bool = False

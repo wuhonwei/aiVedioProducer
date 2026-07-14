@@ -43,4 +43,8 @@ def test_golden_two_chapter_pipeline(tmp_path: Path):
     bible = json.loads(paths.auto_bible_json.read_text(encoding="utf-8"))
     for k in REQUIRED_BIBLE_KEYS:
         assert k in bible
-    assert any(c["name"] == "李青云" for c in bible["characters"])
+    lead = next(c for c in bible["characters"] if c["name"] == "李青云")
+    assert lead.get("prompt_zh")
+    assert bible["character_visuals"][0].get("notes")
+    assert bible["timeline"]
+    assert any(e.get("visual_beat") for e in bible["timeline"])

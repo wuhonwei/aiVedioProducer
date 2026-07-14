@@ -13,7 +13,9 @@ build/
 .env.*
 !.env.example
 data/projects/
+backend/data/
 *.db
+docs/novels/
 .DS_Store
 Thumbs.db
 

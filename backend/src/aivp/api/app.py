@@ -11,6 +11,7 @@ from aivp.api.routes_jobs import router as jobs_router
 from aivp.api.routes_projects import router as projects_router
 from aivp.config import Settings
 from aivp.db import Base
+from aivp.jobs.control import JobControl
 from aivp.llm.ollama_client import OllamaClient
 
 
@@ -33,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.SessionLocal = SessionLocal
     app.state.llm = OllamaClient(settings.ollama_base_url, settings.ollama_model)
     app.state.run_jobs_inline = False
+    app.state.job_control = JobControl()
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):

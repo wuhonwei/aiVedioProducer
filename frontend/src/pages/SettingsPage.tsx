@@ -34,47 +34,57 @@ export function SettingsPage() {
   };
 
   return (
-    <section>
+    <section className="panel">
       <h2>设置</h2>
-      <p>后端 Ollama 配置由环境变量控制；以下为控制台默认值（可写 localStorage）。</p>
+      <p className="panel-lead">
+        后端 Ollama 实际取值来自环境变量 / `.env`；此处本地值仅作控制台备忘。
+      </p>
 
-      <div style={{ display: "grid", gap: 8, maxWidth: 480, marginBottom: 16 }}>
-        <label>
+      <div className="stack" style={{ maxWidth: 480, marginBottom: 16 }}>
+        <label className="field">
           Ollama URL
           <input
             aria-label="ollama-url"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            style={{ width: "100%" }}
           />
         </label>
-        <label>
+        <label className="field">
           默认模型
           <input
             aria-label="ollama-model"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            style={{ width: "100%" }}
           />
         </label>
-        <button type="button" onClick={onSaveLocal}>
-          保存到本地
-        </button>
+        <div className="row">
+          <button type="button" className="btn btn-secondary" onClick={onSaveLocal}>
+            保存到本地
+          </button>
+          <button type="button" className="btn btn-primary" onClick={() => void refresh()}>
+            刷新健康检查
+          </button>
+        </div>
       </div>
 
-      <h3>Health</h3>
-      <button type="button" onClick={() => void refresh()}>
-        刷新健康检查
-      </button>
-      {error && <p role="alert">{error}</p>}
-      {health && (
-        <ul>
-          <li>ok: {String(health.ok)}</li>
-          <li>base_url: {health.base_url}</li>
-          <li>model: {health.model}</li>
-        </ul>
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
       )}
-      {!health && !error && <p>检查中…</p>}
+      {health && (
+        <div className="status-card">
+          <div>
+            状态：
+            <span className={`status-pill ${health.ok ? "is-succeeded" : "is-failed"}`}>
+              {health.ok ? "可用" : "不可用"}
+            </span>
+          </div>
+          <div>base_url：{health.base_url}</div>
+          <div>model：{health.model}</div>
+        </div>
+      )}
+      {!health && !error && <p className="panel-lead">检查中…</p>}
     </section>
   );
 }

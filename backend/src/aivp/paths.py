@@ -14,9 +14,13 @@ class ProjectPaths:
         self.chunks_jsonl = self.stages_dir / "03_chunks" / "chunks.jsonl"
         self.extract_dir = self.stages_dir / "04_extract"
         self.entities_json = self.stages_dir / "05_normalize" / "entities.json"
-        self.events_json = self.stages_dir / "06_timeline" / "events.json"
-        self.arcs_json = self.stages_dir / "07_arcs" / "arcs.json"
-        self.auto_bible_json = self.stages_dir / "08_bible" / "story_bible.auto.json"
+        self.enrich_dir = self.stages_dir / "06_enrich_assets"
+        self.majors_json = self.enrich_dir / "majors.json"
+        self.assets_json = self.enrich_dir / "assets.json"
+        self.events_enriched_json = self.enrich_dir / "events_enriched.json"
+        self.events_json = self.stages_dir / "07_timeline" / "events.json"
+        self.arcs_json = self.stages_dir / "08_arcs" / "arcs.json"
+        self.auto_bible_json = self.stages_dir / "09_bible" / "story_bible.auto.json"
         self.overlay_json = self.overlays_dir / "story_bible.overlay.json"
 
     def ensure(self) -> None:
@@ -27,9 +31,10 @@ class ProjectPaths:
             self.stages_dir / "03_chunks",
             self.extract_dir,
             self.stages_dir / "05_normalize",
-            self.stages_dir / "06_timeline",
-            self.stages_dir / "07_arcs",
-            self.stages_dir / "08_bible",
+            self.enrich_dir,
+            self.stages_dir / "07_timeline",
+            self.stages_dir / "08_arcs",
+            self.stages_dir / "09_bible",
             self.overlays_dir,
             self.exports_dir,
         ):

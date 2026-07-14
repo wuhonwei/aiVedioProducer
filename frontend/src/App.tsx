@@ -7,11 +7,19 @@ import { SettingsPage } from "./pages/SettingsPage";
 
 type Page = "list" | "pipeline" | "bible" | "export" | "settings";
 
+const NAV: { id: Page; label: string; needsProject?: boolean }[] = [
+  { id: "list", label: "项目" },
+  { id: "pipeline", label: "流水线", needsProject: true },
+  { id: "bible", label: "Story Bible", needsProject: true },
+  { id: "export", label: "导出", needsProject: true },
+  { id: "settings", label: "设置" },
+];
+
 function parseHash(): { page: Page; projectId: string | null } {
   const raw = window.location.hash.replace(/^#\/?/, "");
   const [pagePart, idPart] = raw.split("/");
   const page = (pagePart || "list") as Page;
-  const allowed: Page[] = ["list", "pipeline", "bible", "export", "settings"];
+  const allowed = NAV.map((n) => n.id);
   return {
     page: allowed.includes(page) ? page : "list",
     projectId: idPart || null,
@@ -37,35 +45,31 @@ export default function App() {
   };
 
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: 16 }}>
-      <header style={{ marginBottom: 16 }}>
-        <h1>AIVP Story Bible</h1>
-        <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button type="button" onClick={() => go("list")}>
-            项目
-          </button>
-          <button
-            type="button"
-            disabled={!projectId}
-            onClick={() => go("pipeline")}
-          >
-            流水线
-          </button>
-          <button type="button" disabled={!projectId} onClick={() => go("bible")}>
-            Bible
-          </button>
-          <button
-            type="button"
-            disabled={!projectId}
-            onClick={() => go("export")}
-          >
-            导出
-          </button>
-          <button type="button" onClick={() => go("settings")}>
-            设置
-          </button>
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="brand-block">
+          <h1>AIVP Story Bible</h1>
+          <p>国风长篇文本层工作台 · 清洗切分 · 结构化抽取 · 可编辑导出</p>
+          {projectId && (
+            <div className="project-chip">
+              <span>当前项目</span>
+              <strong>{projectId}</strong>
+            </div>
+          )}
+        </div>
+        <nav className="nav-row" aria-label="主导航">
+          {NAV.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`nav-btn${page === item.id ? " is-active" : ""}`}
+              disabled={Boolean(item.needsProject && !projectId)}
+              onClick={() => go(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
         </nav>
-        {projectId && <p>当前项目：{projectId}</p>}
       </header>
 
       {page === "list" && (
@@ -80,8 +84,10 @@ export default function App() {
       {page === "export" && projectId && <ExportPage projectId={projectId} />}
       {page === "settings" && <SettingsPage />}
       {(page === "pipeline" || page === "bible" || page === "export") && !projectId && (
-        <p>请先选择项目。</p>
+        <section className="panel">
+          <p className="panel-lead">请先在「项目」页选择或新建一个项目。</p>
+        </section>
       )}
-    </main>
+    </div>
   );
 }

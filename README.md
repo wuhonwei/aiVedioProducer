@@ -16,6 +16,19 @@
 git worktree add ../text-layer-story-bible feature/text-layer-story-bible
 ```
 
+## 一键启动（推荐）
+
+Windows 下任选其一：
+
+- 双击仓库根目录 `start-dev.bat`
+- 或在 PowerShell 中执行：
+
+```powershell
+.\scripts\start-dev.ps1
+```
+
+脚本会安装依赖（首次）、打开两个终端分别跑后端 `:8000` 与前端 `:5173`，并尝试打开浏览器。关闭对应终端窗口即可停止。
+
 ## 后端
 
 ```bash

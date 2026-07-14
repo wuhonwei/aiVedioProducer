@@ -16,7 +16,13 @@ export type Job = {
   chunks_total: number;
   error_message?: string | null;
   resume_from_step?: string | null;
+  force_enrich?: boolean;
   created_at?: string | null;
+};
+
+export type StartJobOptions = {
+  resumeFromStep?: string | null;
+  forceEnrich?: boolean;
 };
 
 export type ExportResult = {
@@ -31,9 +37,21 @@ export type OllamaHealth = {
   model: string;
 };
 
+async function readErrorMessage(r: Response): Promise<string> {
+  const text = await r.text();
+  try {
+    const body = JSON.parse(text) as { message?: string; detail?: string };
+    if (typeof body.message === "string" && body.message) return body.message;
+    if (typeof body.detail === "string" && body.detail) return body.detail;
+  } catch {
+    // keep raw text
+  }
+  return text || `${r.status} ${r.statusText}`;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${path}`, init);
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok) throw new Error(await readErrorMessage(r));
   return r.json() as Promise<T>;
 }
 
@@ -58,17 +76,31 @@ export const uploadSource = (projectId: string, file: File) => {
   );
 };
 
-export const startJob = (projectId: string, resumeFromStep?: string | null) =>
-  req<Job>(`/api/projects/${projectId}/jobs`, {
+export const startJob = (projectId: string, options?: StartJobOptions | string | null) => {
+  const opts: StartJobOptions =
+    typeof options === "string" || options == null
+      ? { resumeFromStep: options }
+      : options;
+  const body: Record<string, unknown> = {};
+  if (opts.resumeFromStep != null) body.resume_from_step = opts.resumeFromStep;
+  if (opts.forceEnrich) body.force_enrich = true;
+  return req<Job>(`/api/projects/${projectId}/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(
-      resumeFromStep != null ? { resume_from_step: resumeFromStep } : {},
-    ),
+    body: JSON.stringify(body),
   });
+};
 
 export const getJob = (projectId: string, jobId: string) =>
   req<Job>(`/api/projects/${projectId}/jobs/${jobId}`);
+
+export const getLatestJob = (projectId: string) =>
+  req<Job>(`/api/projects/${projectId}/jobs/latest`);
+
+export const cancelJob = (projectId: string, jobId: string) =>
+  req<Job>(`/api/projects/${projectId}/jobs/${jobId}/cancel`, {
+    method: "POST",
+  });
 
 export const getBible = (projectId: string) =>
   req<Record<string, unknown>>(`/api/projects/${projectId}/bible`);
