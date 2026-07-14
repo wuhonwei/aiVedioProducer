@@ -16,6 +16,28 @@ def health_ollama(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     return {"ok": client.healthy(), "base_url": settings.ollama_base_url, "model": settings.ollama_model}
 
 
+@router.get("/health/comfy")
+def health_comfy(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    from aivp.visual.image_backend import ComfyImageBackend, StubImageBackend
+
+    if (settings.image_backend or "").lower() == "comfy":
+        client = ComfyImageBackend(settings.comfy_base_url, settings.comfy_checkpoint)
+        return {
+            "ok": client.healthy(),
+            "backend": "comfy",
+            "base_url": settings.comfy_base_url,
+            "checkpoint": settings.comfy_checkpoint,
+        }
+    stub = StubImageBackend()
+    return {
+        "ok": stub.healthy(),
+        "backend": "stub",
+        "base_url": settings.comfy_base_url,
+        "checkpoint": settings.comfy_checkpoint,
+        "note": "Using stub images until AIVP_IMAGE_BACKEND=comfy and ComfyUI is running",
+    }
+
+
 @router.get("/health/deepseek")
 def health_deepseek(
     request: Request,

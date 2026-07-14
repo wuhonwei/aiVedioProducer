@@ -10,6 +10,7 @@ from aivp.api.routes_health import router as health_router
 from aivp.api.routes_jobs import router as jobs_router
 from aivp.api.routes_projects import router as projects_router
 from aivp.api.routes_shots import router as shots_router
+from aivp.api.routes_visual import router as visual_router
 from aivp.config import Settings
 from aivp.db import Base
 from aivp.jobs.control import JobControl
@@ -73,5 +74,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jobs_router, prefix="/api")
     app.include_router(bible_router, prefix="/api")
     app.include_router(shots_router, prefix="/api")
+    app.include_router(visual_router, prefix="/api")
     app.include_router(health_router, prefix="/api")
     return app

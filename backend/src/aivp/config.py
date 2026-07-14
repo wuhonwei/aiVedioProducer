@@ -31,3 +31,9 @@ class Settings(BaseSettings):
     shot_force: bool = False
     # If false, missing DeepSeek key skips shot stage with warning instead of failing.
     shot_require_deepseek: bool = False
+    # Visual / LoRA layer
+    image_backend: str = "stub"  # stub | comfy
+    comfy_base_url: str = "http://127.0.0.1:8188"
+    comfy_checkpoint: str = ""
+    lora_train_cmd: str = ""
+    visual_candidate_count: int = 8

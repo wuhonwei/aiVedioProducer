@@ -135,3 +135,83 @@ export const getShots = (projectId: string) =>
     model?: string;
     warnings?: string[];
   }>(`/api/projects/${projectId}/shots`);
+
+export type VisualCharacter = {
+  character_id: string;
+  name: string;
+  trigger: string;
+  candidate_count: number;
+  curated_count: number;
+  lora_ready: boolean;
+  candidates: string[];
+  curated: string[];
+  status?: string;
+  prompt_zh?: string;
+};
+
+export const listVisualCharacters = (projectId: string) =>
+  req<{ characters: VisualCharacter[]; backend: string }>(
+    `/api/projects/${projectId}/visual/characters`,
+  );
+
+export const startVisualCandidates = (
+  projectId: string,
+  body?: { character_ids?: string[]; count?: number },
+) =>
+  req<{ id: string; status: string }>(`/api/projects/${projectId}/visual/candidates`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+
+export const getVisualJob = (projectId: string, jobId: string) =>
+  req<{
+    id: string;
+    status: string;
+    progress_done?: number;
+    progress_total?: number;
+    error?: string | null;
+    result?: unknown;
+  }>(`/api/projects/${projectId}/visual/jobs/${jobId}`);
+
+export const curateVisualCharacter = (
+  projectId: string,
+  characterId: string,
+  keep: string[],
+) =>
+  req<{ curated: string[]; count: number }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/curate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keep }),
+    },
+  );
+
+export const trainVisualLora = (projectId: string, characterIds?: string[]) =>
+  req<{ results: Array<Record<string, unknown>> }>(
+    `/api/projects/${projectId}/visual/lora/train`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ character_ids: characterIds }),
+    },
+  );
+
+export const visualT2I = (
+  projectId: string,
+  body: { character_id: string; prompt: string; shot_id?: string },
+) =>
+  req<Record<string, unknown>>(`/api/projects/${projectId}/visual/t2i`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+export const visualFileUrl = (
+  projectId: string,
+  characterId: string,
+  folder: string,
+  filename: string,
+) =>
+  `/api/projects/${projectId}/visual/characters/${characterId}/files/${folder}/${filename}`;
