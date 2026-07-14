@@ -14,6 +14,7 @@ from aivp.pipeline.clean import run_clean
 from aivp.pipeline.enrich import run_enrich
 from aivp.pipeline.extract import run_extract
 from aivp.pipeline.normalize import run_normalize
+from aivp.pipeline.shot_script import run_shot_script
 from aivp.pipeline.timeline import run_timeline
 from aivp.pipeline.types import STAGE_ALIASES, STAGE_ORDER
 
@@ -26,6 +27,8 @@ def run_job(
     *,
     should_cancel: Callable[[], bool] | None = None,
     force_enrich: bool = False,
+    force_shots: bool = False,
+    shot_llm=None,
 ) -> None:
     job = session.get(Job, job_id)
     if not job:
@@ -131,6 +134,28 @@ def run_job(
                     llm=llm,
                     should_cancel=should_cancel,
                 )
+            elif step == "10_shot_script":
+
+                def _on_shot_progress(done: int, total: int) -> None:
+                    job.chunks_done = done
+                    job.chunks_total = total
+                    session.commit()
+
+                active_shot_llm = shot_llm
+                if active_shot_llm is None and settings.shot_require_deepseek:
+                    raise RuntimeError("deepseek_api_key_missing")
+                result = run_shot_script(
+                    paths,
+                    settings,
+                    active_shot_llm,
+                    should_cancel=should_cancel,
+                    on_progress=_on_shot_progress,
+                    force=bool(force_shots or settings.shot_force),
+                )
+                warnings.extend(result.get("warnings") or [])
+                if result.get("skipped"):
+                    warnings.append("shot_script_skipped_existing")
+                session.commit()
             _check_cancel()
             session.add(JobStep(job_id=job.id, step=step, status="succeeded"))
             session.commit()

@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
-import { healthOllama, type OllamaHealth } from "../api/client";
+import {
+  healthDeepseek,
+  healthOllama,
+  type DeepseekHealth,
+  type OllamaHealth,
+} from "../api/client";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_MODEL = "qwen2.5:14b";
 
 export function SettingsPage() {
   const [health, setHealth] = useState<OllamaHealth | null>(null);
+  const [deepseek, setDeepseek] = useState<DeepseekHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState(
     () => localStorage.getItem("ollama_base_url") ?? DEFAULT_BASE_URL,
@@ -17,9 +23,12 @@ export function SettingsPage() {
   const refresh = async () => {
     setError(null);
     try {
-      setHealth(await healthOllama());
+      const [o, d] = await Promise.all([healthOllama(), healthDeepseek()]);
+      setHealth(o);
+      setDeepseek(d);
     } catch (e) {
       setHealth(null);
+      setDeepseek(null);
       setError(e instanceof Error ? e.message : String(e));
     }
   };
@@ -37,7 +46,7 @@ export function SettingsPage() {
     <section className="panel">
       <h2>设置</h2>
       <p className="panel-lead">
-        后端 Ollama 实际取值来自环境变量 / `.env`；此处本地值仅作控制台备忘。
+        后端实际取值来自环境变量 / `.env`；此处本地值仅作控制台备忘。
       </p>
 
       <div className="stack" style={{ maxWidth: 480, marginBottom: 16 }}>
@@ -75,13 +84,26 @@ export function SettingsPage() {
       {health && (
         <div className="status-card">
           <div>
-            状态：
+            Ollama：
             <span className={`status-pill ${health.ok ? "is-succeeded" : "is-failed"}`}>
               {health.ok ? "可用" : "不可用"}
             </span>
           </div>
           <div>base_url：{health.base_url}</div>
           <div>model：{health.model}</div>
+        </div>
+      )}
+      {deepseek && (
+        <div className="status-card" style={{ marginTop: 12 }}>
+          <div>
+            DeepSeek：
+            <span className={`status-pill ${deepseek.ok ? "is-succeeded" : "is-failed"}`}>
+              {deepseek.ok ? "可用" : deepseek.configured ? "不可用" : "未配置 key"}
+            </span>
+          </div>
+          <div>base_url：{deepseek.base_url}</div>
+          <div>model：{deepseek.model}</div>
+          <p className="note">分镜脚本使用 DeepSeek；密钥仅保存在后端 `.env`。</p>
         </div>
       )}
       {!health && !error && <p className="panel-lead">检查中…</p>}

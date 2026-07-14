@@ -4,13 +4,15 @@ import { PipelinePage } from "./pages/PipelinePage";
 import { BiblePage } from "./pages/BiblePage";
 import { ExportPage } from "./pages/ExportPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { ShotsPage } from "./pages/ShotsPage";
 
-type Page = "list" | "pipeline" | "bible" | "export" | "settings";
+type Page = "list" | "pipeline" | "bible" | "shots" | "export" | "settings";
 
 const NAV: { id: Page; label: string; needsProject?: boolean }[] = [
   { id: "list", label: "项目" },
   { id: "pipeline", label: "流水线", needsProject: true },
   { id: "bible", label: "Story Bible", needsProject: true },
+  { id: "shots", label: "分镜", needsProject: true },
   { id: "export", label: "导出", needsProject: true },
   { id: "settings", label: "设置" },
 ];
@@ -81,9 +83,11 @@ export default function App() {
       )}
       {page === "pipeline" && projectId && <PipelinePage projectId={projectId} />}
       {page === "bible" && projectId && <BiblePage projectId={projectId} />}
+      {page === "shots" && projectId && <ShotsPage projectId={projectId} />}
       {page === "export" && projectId && <ExportPage projectId={projectId} />}
       {page === "settings" && <SettingsPage />}
-      {(page === "pipeline" || page === "bible" || page === "export") && !projectId && (
+      {(page === "pipeline" || page === "bible" || page === "shots" || page === "export") &&
+        !projectId && (
         <section className="panel">
           <p className="panel-lead">请先在「项目」页选择或新建一个项目。</p>
         </section>

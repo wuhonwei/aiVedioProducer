@@ -20,6 +20,7 @@ TERMINAL_STATUSES = ("succeeded", "step_failed", "failed", "cancelled")
 class JobCreate(BaseModel):
     resume_from_step: str | None = None
     force_enrich: bool = False
+    force_shots: bool = False
 
 
 def _short_id() -> str:
@@ -34,7 +35,12 @@ def _job_flags(app) -> dict[str, dict[str, Any]]:
     return flags
 
 
-def _job_out(job: Job, *, force_enrich: bool | None = None) -> dict[str, Any]:
+def _job_out(
+    job: Job,
+    *,
+    force_enrich: bool | None = None,
+    force_shots: bool | None = None,
+) -> dict[str, Any]:
     return {
         "id": job.id,
         "project_id": job.project_id,
@@ -45,6 +51,7 @@ def _job_out(job: Job, *, force_enrich: bool | None = None) -> dict[str, Any]:
         "error_message": job.error_message,
         "resume_from_step": job.resume_from_step,
         "force_enrich": bool(force_enrich),
+        "force_shots": bool(force_shots),
         "created_at": job.created_at.isoformat() if job.created_at else None,
     }
 
@@ -53,9 +60,11 @@ def _run_job_in_session(app, job_id: str) -> None:
     SessionLocal = app.state.SessionLocal
     settings = app.state.settings
     llm = app.state.llm
+    shot_llm = getattr(app.state, "shot_llm", None)
     control = app.state.job_control
     flags = _job_flags(app).pop(job_id, {})
     force_enrich = bool(flags.get("force_enrich"))
+    force_shots = bool(flags.get("force_shots"))
     control.register(job_id)
     session = SessionLocal()
     try:
@@ -66,6 +75,8 @@ def _run_job_in_session(app, job_id: str) -> None:
             llm=llm,
             should_cancel=lambda: control.is_cancelled(job_id),
             force_enrich=force_enrich,
+            force_shots=force_shots,
+            shot_llm=shot_llm,
         )
     except Exception:
         # run_job persists step_failed; swallow so the worker thread stays quiet
@@ -114,6 +125,9 @@ def start_job(
     # Force enrich implies restarting from asset enrichment unless caller overrides.
     if body.force_enrich and not resume:
         resume = "06_enrich_assets"
+    # Force shots alone resumes from shot stage.
+    if body.force_shots and not resume and not body.force_enrich:
+        resume = "10_shot_script"
     job = Job(
         id=_short_id(),
         project_id=project_id,
@@ -125,7 +139,10 @@ def start_job(
     db.refresh(job)
 
     app = request.app
-    _job_flags(app)[job.id] = {"force_enrich": bool(body.force_enrich)}
+    _job_flags(app)[job.id] = {
+        "force_enrich": bool(body.force_enrich),
+        "force_shots": bool(body.force_shots),
+    }
     if getattr(app.state, "run_jobs_inline", False):
         _run_job_in_session(app, job.id)
         db.refresh(job)
@@ -141,7 +158,11 @@ def start_job(
         thread.start()
         app.state._last_job_thread = thread
 
-    return _job_out(job, force_enrich=body.force_enrich)
+    return _job_out(
+        job,
+        force_enrich=body.force_enrich,
+        force_shots=body.force_shots,
+    )
 
 
 @router.get("/projects/{project_id}/jobs/latest")

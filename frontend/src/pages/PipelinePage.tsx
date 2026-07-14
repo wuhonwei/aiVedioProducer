@@ -110,7 +110,11 @@ export function PipelinePage({ projectId }: Props) {
     }
   };
 
-  const launchJob = async (options?: { forceEnrich?: boolean; resumeFromStep?: string }) => {
+  const launchJob = async (options?: {
+    forceEnrich?: boolean;
+    forceShots?: boolean;
+    resumeFromStep?: string;
+  }) => {
     setStarting(true);
     setError(null);
     try {
@@ -130,6 +134,7 @@ export function PipelinePage({ projectId }: Props) {
       }
       const j = await startJob(projectId, {
         forceEnrich: options?.forceEnrich,
+        forceShots: options?.forceShots,
         resumeFromStep: options?.resumeFromStep,
       });
       rememberJob(j);
@@ -156,6 +161,10 @@ export function PipelinePage({ projectId }: Props) {
 
   const onForceEnrich = async () => {
     await launchJob({ forceEnrich: true, resumeFromStep: "06_enrich_assets" });
+  };
+
+  const onGenerateShots = async () => {
+    await launchJob({ forceShots: true, resumeFromStep: "10_shot_script" });
   };
 
   const onCancel = async () => {
@@ -237,6 +246,14 @@ export function PipelinePage({ projectId }: Props) {
           onClick={() => void onForceEnrich()}
         >
           从 Enrich 重跑
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={starting || active}
+          onClick={() => void onGenerateShots()}
+        >
+          生成分镜
         </button>
         <button
           type="button"

@@ -54,6 +54,7 @@ describe("PipelinePage", () => {
     await waitFor(() => {
       expect(api.startJob).toHaveBeenCalledWith("p1", {
         forceEnrich: undefined,
+        forceShots: undefined,
         resumeFromStep: undefined,
       });
     });
@@ -84,6 +85,7 @@ describe("PipelinePage", () => {
     await waitFor(() => {
       expect(api.startJob).toHaveBeenCalledWith("p1", {
         forceEnrich: undefined,
+        forceShots: undefined,
         resumeFromStep: undefined,
       });
     });

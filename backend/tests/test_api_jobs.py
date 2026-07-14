@@ -55,6 +55,31 @@ def test_health_ollama_endpoint(tmp_path):
     assert isinstance(body["ok"], bool)
 
 
+def test_force_shots_defaults_resume_step(tmp_path):
+    app = create_app(Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path/'c.db'}"))
+    app.state.run_jobs_inline = True
+    app.state.llm = FakeLlm(default=FAKE_EXTRACT)
+    app.state.shot_llm = FakeLlm(default={"shots": []})
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"name": "shots"}).json()["id"]
+    client.post(
+        f"/api/projects/{pid}/source",
+        files={"file": ("book.txt", SAMPLE.encode("utf-8"), "text/plain")},
+    )
+    client.post(f"/api/projects/{pid}/jobs", json={})
+    second = client.post(
+        f"/api/projects/{pid}/jobs",
+        json={"force_shots": True},
+    )
+    assert second.status_code == 201
+    body = second.json()
+    assert body["force_shots"] is True
+    assert body["resume_from_step"] == "10_shot_script"
+    shots = client.get(f"/api/projects/{pid}/shots")
+    assert shots.status_code == 200
+    assert shots.json()["shot_count"] >= 1
+
+
 def test_force_enrich_defaults_resume_step(tmp_path):
     app = create_app(Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path/'b.db'}"))
     app.state.run_jobs_inline = True

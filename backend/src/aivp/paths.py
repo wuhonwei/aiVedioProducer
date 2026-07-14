@@ -21,6 +21,8 @@ class ProjectPaths:
         self.events_json = self.stages_dir / "07_timeline" / "events.json"
         self.arcs_json = self.stages_dir / "08_arcs" / "arcs.json"
         self.auto_bible_json = self.stages_dir / "09_bible" / "story_bible.auto.json"
+        self.shot_script_dir = self.stages_dir / "10_shot_script"
+        self.shot_script_json = self.shot_script_dir / "shot_script.json"
         self.overlay_json = self.overlays_dir / "story_bible.overlay.json"
 
     def ensure(self) -> None:
@@ -35,6 +37,7 @@ class ProjectPaths:
             self.stages_dir / "07_timeline",
             self.stages_dir / "08_arcs",
             self.stages_dir / "09_bible",
+            self.shot_script_dir,
             self.overlays_dir,
             self.exports_dir,
         ):

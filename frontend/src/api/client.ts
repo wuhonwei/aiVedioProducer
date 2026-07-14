@@ -23,6 +23,14 @@ export type Job = {
 export type StartJobOptions = {
   resumeFromStep?: string | null;
   forceEnrich?: boolean;
+  forceShots?: boolean;
+};
+
+export type DeepseekHealth = {
+  ok: boolean;
+  configured: boolean;
+  base_url: string;
+  model: string;
 };
 
 export type ExportResult = {
@@ -84,6 +92,7 @@ export const startJob = (projectId: string, options?: StartJobOptions | string |
   const body: Record<string, unknown> = {};
   if (opts.resumeFromStep != null) body.resume_from_step = opts.resumeFromStep;
   if (opts.forceEnrich) body.force_enrich = true;
+  if (opts.forceShots) body.force_shots = true;
   return req<Job>(`/api/projects/${projectId}/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -116,3 +125,13 @@ export const createExport = (projectId: string) =>
   req<ExportResult>(`/api/projects/${projectId}/exports`, { method: "POST" });
 
 export const healthOllama = () => req<OllamaHealth>("/api/health/ollama");
+
+export const healthDeepseek = () => req<DeepseekHealth>("/api/health/deepseek");
+
+export const getShots = (projectId: string) =>
+  req<{
+    shots?: Array<Record<string, unknown>>;
+    shot_count?: number;
+    model?: string;
+    warnings?: string[];
+  }>(`/api/projects/${projectId}/shots`);

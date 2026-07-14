@@ -8,6 +8,7 @@ STAGE_ORDER = [
     "07_timeline",
     "08_arcs",
     "09_bible",
+    "10_shot_script",
 ]
 
 # Old resume_from_step values from pre-enrich pipelines.
