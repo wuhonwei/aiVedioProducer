@@ -41,6 +41,75 @@ def test_build_assets_fills_major_prompt():
     assert assets["props"][0]["prompt_zh"]
 
 
+def test_build_assets_distinct_without_llm():
+    entities = {
+        "characters": [
+            {
+                "id": "ent_0001",
+                "name": "林砚之",
+                "evidence": "林砚之背着一个半旧的蓝布包袱，站在雾里",
+            },
+            {
+                "id": "ent_0002",
+                "name": "苏婆婆",
+                "evidence": "白发苍苍的老婆婆，穿着粗布衣衫",
+            },
+            {
+                "id": "ent_0003",
+                "name": "周大人",
+                "evidence": "穿着官服的人，是县里的知县，周大人",
+            },
+        ],
+        "locations": [],
+        "factions": [],
+        "props": [],
+    }
+    majors = {
+        "characters": ["ent_0001", "ent_0002", "ent_0003"],
+        "locations": [],
+        "factions": [],
+        "props": [],
+    }
+    assets = build_assets(entities, majors, llm=None, extracts=[])
+    prompts = [c["prompt_zh"] for c in assets["characters"]]
+    assert len(set(prompts)) == 3
+    wardrobes = [c["wardrobe"]["default"] for c in assets["characters"]]
+    assert len(set(wardrobes)) == 3
+
+
+def test_build_assets_fails_on_cloned_llm_looks():
+    entities = {
+        "characters": [
+            {"id": "ent_0001", "name": "甲", "evidence": "甲"},
+            {"id": "ent_0002", "name": "乙", "evidence": "乙"},
+        ],
+        "locations": [],
+        "factions": [],
+        "props": [],
+    }
+    majors = {"characters": ["ent_0001", "ent_0002"], "locations": [], "factions": [], "props": []}
+    twin = {
+        "appearance": {"face": "同脸", "hair": "同发"},
+        "wardrobe": {"default": "同衣"},
+        "age_look": "青年",
+        "prompt_zh": "共用定妆",
+    }
+    llm = FakeLlm(
+        default={
+            "items": [
+                {"name": "甲", **twin},
+                {"name": "乙", **twin},
+            ]
+        }
+    )
+    try:
+        build_assets(entities, majors, llm, extracts=[])
+        raised = False
+    except ValueError as e:
+        raised = str(e).startswith("enrich_distinct_characters_failed")
+    assert raised
+
+
 def test_run_enrich_writes_artifacts(tmp_path: Path):
     settings = Settings(data_root=tmp_path)
     paths = ProjectPaths(tmp_path, "e1")

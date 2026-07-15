@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     timeline_page_size: int = 50
     api_page_size: int = 50
     enrich_event_window: int = 40
+    enrich_require_distinct_characters: bool = True
     enrich_top_characters: int = 8
     enrich_top_locations: int = 8
     enrich_top_props: int = 6

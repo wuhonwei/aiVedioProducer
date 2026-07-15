@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from aivp.jobs.control import JobCancelled
+from aivp.pipeline.character_looks import assert_major_characters_distinct
 from aivp.pipeline.coerce_assets import (
     ensure_character_card,
     ensure_event_beat,
@@ -18,8 +19,11 @@ from aivp.pipeline.timeline import build_timeline
 
 ASSET_SYSTEM = (
     "You enrich guofeng story bible assets for video. Output strict JSON with key items "
-    "(array of objects). Each object needs name and production fields. "
-    "Prefer evidence; mark guesses in inferred_fields. No markdown."
+    "(array of objects). Each object needs name and production fields "
+    "(appearance, wardrobe, age_look, prompt_zh). "
+    "Use each entity's evidence; characters MUST look distinct from each other "
+    "(different face/hair/wardrobe/prompt_zh). Prefer evidence; mark guesses in "
+    "inferred_fields. No markdown."
 )
 
 EVENT_SYSTEM = (
@@ -71,10 +75,21 @@ def _llm_batch(
 ) -> dict[str, dict]:
     if not entities:
         return {}
+    slim = []
+    for e in entities:
+        slim.append(
+            {
+                "id": e.get("id"),
+                "name": e.get("name"),
+                "aliases": e.get("aliases") or [],
+                "evidence": e.get("evidence") or "",
+            }
+        )
     user = (
         f"kind={kind}\n"
-        "Fill production-ready fields for these entities.\n"
-        + json.dumps({"entities": entities, "context": context}, ensure_ascii=False)[
+        "Fill production-ready fields for these entities. "
+        "Characters must not share the same face, hair, wardrobe, or prompt_zh.\n"
+        + json.dumps({"entities": slim, "context": context}, ensure_ascii=False)[
             :12000
         ]
     )
@@ -104,6 +119,7 @@ def build_assets(
     extracts: list[dict],
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    require_distinct_characters: bool = True,
 ) -> dict[str, list[dict]]:
     context = {
         "sample_events": [
@@ -152,6 +168,9 @@ def build_assets(
             if ent.get("id") in major_ids:
                 continue
             assets[kind].append(_ensure_kind(kind, ent, None, "minor"))
+
+    if require_distinct_characters:
+        assert_major_characters_distinct(assets.get("characters") or [])
     return assets
 
 
@@ -250,9 +269,30 @@ def run_enrich(
             extracts=extracts,
             should_cancel=should_cancel,
             on_progress=on_progress,
+            require_distinct_characters=bool(
+                getattr(settings, "enrich_require_distinct_characters", True)
+            ),
         )
     except JobCancelled:
         raise
+    except ValueError as e:
+        # Distinct-character hard fail (spec B) — never soft-swallow.
+        if str(e).startswith("enrich_distinct_characters_failed"):
+            raise
+        warnings.append(f"enrich_assets_failed:{e}")
+        if settings.enrich_strict:
+            raise
+        assets = {k: [] for k in ENTITY_KEYS}
+        for kind in ENTITY_KEYS:
+            for ent in entities.get(kind) or []:
+                tier = (
+                    "major"
+                    if ent.get("id") in set(selection["majors"].get(kind) or [])
+                    else "minor"
+                )
+                assets[kind].append(_ensure_kind(kind, ent, None, tier))
+        if getattr(settings, "enrich_require_distinct_characters", True):
+            assert_major_characters_distinct(assets.get("characters") or [])
     except Exception as e:  # noqa: BLE001
         warnings.append(f"enrich_assets_failed:{e}")
         if settings.enrich_strict:
@@ -266,6 +306,8 @@ def run_enrich(
                     else "minor"
                 )
                 assets[kind].append(_ensure_kind(kind, ent, None, tier))
+        if getattr(settings, "enrich_require_distinct_characters", True):
+            assert_major_characters_distinct(assets.get("characters") or [])
 
     char_names = [str(c.get("name")) for c in assets.get("characters") or [] if c.get("name")]
     try:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from aivp.pipeline.character_looks import seed_character_look
+
 
 def _text(value: Any) -> str:
     if value is None:
@@ -25,39 +27,49 @@ def _str_list(value: Any) -> list[str]:
 def ensure_character_card(entity: dict, raw: dict | None, *, tier: str) -> dict[str, Any]:
     raw = raw or {}
     name = _text(entity.get("name") or raw.get("name"))
+    seed = seed_character_look(entity) if tier == "major" else None
     appearance = raw.get("appearance") if isinstance(raw.get("appearance"), dict) else {}
     wardrobe = raw.get("wardrobe") if isinstance(raw.get("wardrobe"), dict) else {}
     voice = raw.get("voice") if isinstance(raw.get("voice"), dict) else {}
+    seed_app = (seed or {}).get("appearance") or {}
+    seed_ward = (seed or {}).get("wardrobe") or {}
 
     face = _text(appearance.get("face")) or (
-        "\u6e05\u4fca\u56fd\u98ce\u9762\u5bb9\uff0c\u7709\u773c\u6709\u795e"
-        if tier == "major"
-        else ""
+        _text(seed_app.get("face")) if seed else ""
     )
     hair = _text(appearance.get("hair")) or (
-        "\u9ed1\u53d1\u675f\u53d1\u6216\u534a\u675f" if tier == "major" else ""
+        _text(seed_app.get("hair")) if seed else ""
     )
     body = _text(appearance.get("body")) or (
-        "\u4e2d\u7b49\u4f53\u578b" if tier == "major" else ""
+        _text(seed_app.get("body")) if seed else ""
     )
-    marks = _text(appearance.get("distinctive_marks"))
+    marks = _text(appearance.get("distinctive_marks")) or (
+        _text(seed_app.get("distinctive_marks")) if seed else ""
+    )
     wardrobe_default = _text(wardrobe.get("default")) or (
-        "\u9752\u7070\u8272\u5e03\u8863\u957f\u886b" if tier == "major" else ""
+        _text(seed_ward.get("default")) if seed else ""
     )
     colors = _str_list(wardrobe.get("colors")) or (
-        ["\u9752\u7070", "\u7c73\u767d"] if tier == "major" else []
+        list(seed_ward.get("colors") or []) if seed else []
     )
     timbre = _text(voice.get("timbre")) or (
-        "\u4e2d\u9752\u5e74\u6e05\u67d4\u7537\u58f0" if tier == "major" else ""
+        "中青年清柔女声"
+        if seed and seed.get("gender_presentation") == "feminine"
+        else ("中青年清柔男声" if tier == "major" else "")
+    )
+    age_look = _text(raw.get("age_look")) or (
+        _text(seed.get("age_look")) if seed else ""
     )
     prompt = _text(raw.get("prompt_zh"))
-    if not prompt and tier == "major":
+    if not prompt and seed:
+        prompt = _text(seed.get("prompt_zh"))
+    if not prompt and tier == "major" and name:
         prompt = (
-            f"{name}\uff0c{age_look_default(raw)}\uff0c{hair}\uff0c{face}\uff0c"
-            f"\u8eab\u7740{wardrobe_default}\uff0c\u56fd\u98ce\u52a8\u753b\u89d2\u8272\u5b9a\u5986"
+            f"{name}，{age_look or '角色'}，{hair}，{face}，"
+            f"身着{wardrobe_default or '常服'}，国风动画角色定妆"
         )
-    fallback_tag = wardrobe_default or face or "\u914d\u89d2"
-    brief = _text(raw.get("brief")) or ("%s\uff1a%s" % (name, fallback_tag))
+    fallback_tag = wardrobe_default or face or "配角"
+    brief = _text(raw.get("brief")) or ("%s：%s" % (name, fallback_tag))
     inferred = _str_list(raw.get("inferred_fields"))
     for field, filled in [
         ("appearance.face", face and not _text((appearance or {}).get("face"))),
@@ -68,14 +80,22 @@ def ensure_character_card(entity: dict, raw: dict | None, *, tier: str) -> dict[
         if filled and field not in inferred:
             inferred.append(field)
 
+    evidence = _str_list(raw.get("evidence"))
+    for e in (seed or {}).get("evidence") or []:
+        if e and e not in evidence:
+            evidence.append(e)
+    if _text(entity.get("evidence")) and _text(entity.get("evidence")) not in evidence:
+        evidence.append(_text(entity.get("evidence")))
+
     card = {
         "id": entity.get("id"),
         "name": name,
         "aliases": list(entity.get("aliases") or raw.get("aliases") or []),
         "tier": tier,
         "role": _text(raw.get("role")) or ("supporting" if tier == "major" else "minor"),
-        "age_look": _text(raw.get("age_look")) or age_look_default(raw),
-        "gender_presentation": _text(raw.get("gender_presentation")) or "unspecified",
+        "age_look": age_look,
+        "gender_presentation": _text(raw.get("gender_presentation"))
+        or (_text(seed.get("gender_presentation")) if seed else "unspecified"),
         "appearance": {
             "face": face,
             "hair": hair,
@@ -88,21 +108,21 @@ def ensure_character_card(entity: dict, raw: dict | None, *, tier: str) -> dict[
             "colors": colors,
         },
         "temperament": _str_list(raw.get("temperament"))
-        or (["\u5185\u655b", "\u575a\u5b9a"] if tier == "major" else []),
+        or (["内敛", "坚定"] if tier == "major" else []),
         "signature_actions": _str_list(raw.get("signature_actions")),
         "voice": {
             "timbre": timbre,
-            "pace": _text(voice.get("pace")) or ("\u4e2d\u901f" if tier == "major" else ""),
-            "pitch": _text(voice.get("pitch")) or ("\u4e2d" if tier == "major" else ""),
+            "pace": _text(voice.get("pace")) or ("中速" if tier == "major" else ""),
+            "pitch": _text(voice.get("pitch")) or ("中" if tier == "major" else ""),
             "speech_habits": _str_list(voice.get("speech_habits")),
         },
         "consistency_anchors": _str_list(raw.get("consistency_anchors"))
         or (
-            [wardrobe_default, hair, f"{name}\u9762\u90e8\u7279\u5f81"]
+            [wardrobe_default, hair, f"{name}面部特征"]
             if tier == "major" and wardrobe_default
             else []
         ),
-        "evidence": _str_list(raw.get("evidence")),
+        "evidence": evidence,
         "inferred_fields": inferred,
         "prompt_zh": prompt,
         "brief": brief,
@@ -111,7 +131,8 @@ def ensure_character_card(entity: dict, raw: dict | None, *, tier: str) -> dict[
 
 
 def age_look_default(raw: dict) -> str:
-    return _text(raw.get("age_look")) or "\u5341\u4e03\u81f3\u4e8c\u5341\u5c81\u5e74\u8f7b\u9762\u76f8"
+    """Deprecated shared default — prefer seed_character_look. Kept for callers."""
+    return _text(raw.get("age_look")) or "十七至二十岁年轻面相"
 
 
 def ensure_location_card(entity: dict, raw: dict | None, *, tier: str) -> dict[str, Any]:
