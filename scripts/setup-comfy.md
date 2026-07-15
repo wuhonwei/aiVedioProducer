@@ -19,9 +19,18 @@ Prefer a venv inside the Comfy tree:
 cd tools\ComfyUI
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-# GPU: install CUDA torch from https://pytorch.org matching your driver, then:
+# RTX 50-series (5090 / sm_120) needs CUDA 12.8 wheels — NOT cu121/cu124:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
+
+Manual wheel downloads (Python 3.12 / Windows), if pip is slow:
+
+- https://download.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp312-cp312-win_amd64.whl
+- https://download.pytorch.org/whl/cu128/torchvision-0.26.0%2Bcu128-cp312-cp312-win_amd64.whl
+- https://download.pytorch.org/whl/cu128/torchaudio-2.11.0%2Bcu128-cp312-cp312-win_amd64.whl
+
+Then: `pip install .\path\to\those.whl` and `pip install -r requirements.txt`.
 
 ## 3. Checkpoint
 
