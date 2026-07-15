@@ -72,9 +72,47 @@ def get_bible(
     merged, _meta = _persist(paths)
     if sections:
         keys = [k.strip() for k in sections.split(",") if k.strip()]
-        return {k: merged.get(k) for k in keys if k in merged or k in REQUIRED_BIBLE_KEYS}
-    # Avoid shipping full timeline when only preview is stored; keep timeline_ref.
-    return merged
+        out = {k: merged.get(k) for k in keys if k in merged or k in REQUIRED_BIBLE_KEYS}
+        if "timeline" in keys:
+            preview = _timeline_preview_fields(paths, settings, merged)
+            out["timeline"] = preview["timeline"]
+            out["timeline_ref"] = preview["timeline_ref"]
+        return out
+    # Never inline a huge timeline into Bible GET — clients page via /timeline.
+    preview = _timeline_preview_fields(paths, settings, merged)
+    return {**merged, **preview}
+
+
+def _timeline_preview_fields(
+    paths: ProjectPaths,
+    settings: Settings,
+    merged: dict[str, Any],
+) -> dict[str, Any]:
+    page_size = max(1, int(settings.timeline_page_size or 50))
+    events: list[Any] = []
+    if paths.events_json.exists():
+        try:
+            events = json.loads(paths.events_json.read_text(encoding="utf-8"))
+            if not isinstance(events, list):
+                events = []
+        except (OSError, json.JSONDecodeError):
+            events = []
+    if not events and isinstance(merged.get("timeline"), list):
+        events = list(merged.get("timeline") or [])
+    total = len(events)
+    ref = merged.get("timeline_ref") if isinstance(merged.get("timeline_ref"), dict) else {}
+    if total == 0 and isinstance(ref.get("total_count"), int):
+        total = int(ref["total_count"])
+    preview = events[:page_size] if events else list(merged.get("timeline") or [])[:page_size]
+    return {
+        "timeline": preview,
+        "timeline_ref": {
+            "total_count": total or int(ref.get("total_count") or len(preview)),
+            "page_size": page_size,
+            "preview_count": len(preview),
+            "paged_via": f"/api/projects/.../timeline?offset=&limit=",
+        },
+    }
 
 
 @router.get("/projects/{project_id}/timeline")

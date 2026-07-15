@@ -149,25 +149,48 @@ function AssetCards({ items, kind }: { items: unknown[]; kind: string }) {
 
 function TimelineCards({
   items,
-  hasMore,
-  loading,
-  onLoadMore,
+  page,
+  pageSize,
   total,
+  loading,
+  onPrev,
+  onNext,
 }: {
   items: unknown[];
-  hasMore?: boolean;
+  page: number;
+  pageSize: number;
+  total: number;
   loading?: boolean;
-  onLoadMore?: () => void;
-  total?: number;
+  onPrev?: () => void;
+  onNext?: () => void;
 }) {
+  const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize) || 1);
+  const from = total === 0 ? 0 : page * pageSize + 1;
+  const to = Math.min(total, (page + 1) * pageSize);
   if (!items.length && !loading) return <p className="note">暂无事件。</p>;
   return (
     <div className="stack">
-      {typeof total === "number" && (
-        <p className="note">
-          已显示 {items.length} / {total} 条
-        </p>
-      )}
+      <p className="note" aria-label="timeline-page-status">
+        第 {page + 1}/{pageCount} 页 · 显示 {from}–{to} / 共 {total} 条
+      </p>
+      <div className="row">
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={loading || page <= 0}
+          onClick={() => onPrev?.()}
+        >
+          上一页
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={loading || (page + 1) * pageSize >= total}
+          onClick={() => onNext?.()}
+        >
+          {loading ? "加载中…" : "下一页"}
+        </button>
+      </div>
       <div className="bible-cards" aria-label="timeline-cards">
         {items.map((raw, idx) => {
           const item = asRecord(raw) ?? {};
@@ -195,16 +218,24 @@ function TimelineCards({
           );
         })}
       </div>
-      {hasMore && onLoadMore && (
+      <div className="row">
         <button
           type="button"
           className="btn btn-secondary"
-          disabled={loading}
-          onClick={() => onLoadMore()}
+          disabled={loading || page <= 0}
+          onClick={() => onPrev?.()}
         >
-          {loading ? "加载中…" : "加载更多"}
+          上一页
         </button>
-      )}
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={loading || (page + 1) * pageSize >= total}
+          onClick={() => onNext?.()}
+        >
+          {loading ? "加载中…" : "下一页"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -218,10 +249,12 @@ function ReadableSection({
   value: unknown;
   timelineProps?: {
     items: unknown[];
-    hasMore?: boolean;
+    page: number;
+    pageSize: number;
+    total: number;
     loading?: boolean;
-    onLoadMore?: () => void;
-    total?: number;
+    onPrev?: () => void;
+    onNext?: () => void;
   };
 }) {
   if (ASSET_KEYS.has(section) && Array.isArray(value)) {
@@ -232,10 +265,12 @@ function ReadableSection({
     return (
       <TimelineCards
         items={items}
-        hasMore={timelineProps?.hasMore}
+        page={timelineProps?.page ?? 0}
+        pageSize={timelineProps?.pageSize ?? 20}
+        total={timelineProps?.total ?? items.length}
         loading={timelineProps?.loading}
-        onLoadMore={timelineProps?.onLoadMore}
-        total={timelineProps?.total}
+        onPrev={timelineProps?.onPrev}
+        onNext={timelineProps?.onNext}
       />
     );
   }
@@ -298,8 +333,9 @@ export function BiblePage({ projectId }: Props) {
   const [editJson, setEditJson] = useState(false);
   const [timelineItems, setTimelineItems] = useState<unknown[]>([]);
   const [timelineTotal, setTimelineTotal] = useState(0);
-  const [timelineHasMore, setTimelineHasMore] = useState(false);
+  const [timelinePage, setTimelinePage] = useState(0);
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const timelinePageSize = 20;
 
   const refreshMeta = async () => {
     try {
@@ -310,21 +346,22 @@ export function BiblePage({ projectId }: Props) {
     }
   };
 
-  const loadTimeline = async (reset = false) => {
+  const loadTimelinePage = async (page: number) => {
     setTimelineLoading(true);
     try {
-      const offset = reset ? 0 : timelineItems.length;
-      const page = await getTimeline(projectId, offset, 50);
-      setTimelineItems((prev) => (reset ? page.items : [...prev, ...page.items]));
-      setTimelineTotal(page.total_count);
-      setTimelineHasMore(page.has_more);
+      const offset = page * timelinePageSize;
+      const result = await getTimeline(projectId, offset, timelinePageSize);
+      setTimelineItems(result.items);
+      setTimelineTotal(result.total_count);
+      setTimelinePage(page);
     } catch (e) {
-      // Fall back to bible.timeline preview when dedicated API not ready.
-      if (reset && Array.isArray(bible.timeline)) {
-        setTimelineItems(bible.timeline as unknown[]);
+      if (Array.isArray(bible.timeline)) {
+        const all = bible.timeline as unknown[];
         const ref = asRecord(bible.timeline_ref);
-        setTimelineTotal(Number(ref?.total_count ?? (bible.timeline as unknown[]).length));
-        setTimelineHasMore(false);
+        const total = Number(ref?.total_count ?? all.length);
+        setTimelineItems(all.slice(page * timelinePageSize, (page + 1) * timelinePageSize));
+        setTimelineTotal(total);
+        setTimelinePage(page);
       } else {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -344,16 +381,16 @@ export function BiblePage({ projectId }: Props) {
         setEditJson(false);
         await refreshMeta();
         try {
-          const page = await getTimeline(projectId, 0, 50);
-          setTimelineItems(page.items);
-          setTimelineTotal(page.total_count);
-          setTimelineHasMore(page.has_more);
+          const result = await getTimeline(projectId, 0, timelinePageSize);
+          setTimelineItems(result.items);
+          setTimelineTotal(result.total_count);
+          setTimelinePage(0);
         } catch {
           const preview = Array.isArray(data.timeline) ? data.timeline : [];
-          setTimelineItems(preview);
           const ref = asRecord(data.timeline_ref);
+          setTimelineItems(preview.slice(0, timelinePageSize));
           setTimelineTotal(Number(ref?.total_count ?? preview.length));
-          setTimelineHasMore(false);
+          setTimelinePage(0);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -447,7 +484,7 @@ export function BiblePage({ projectId }: Props) {
             <h3 style={{ margin: 0, fontFamily: "var(--font-display)" }}>
               {BIBLE_SECTIONS.find((s) => s.key === section)?.title}
             </h3>
-            {(supportsCards || !isLogline) && (
+            {(supportsCards || !isLogline) && section !== "timeline" && (
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -481,7 +518,21 @@ export function BiblePage({ projectId }: Props) {
             </button>
           </div>
 
-          {editJson || isLogline ? (
+          {section === "timeline" ? (
+            <ReadableSection
+              section={section}
+              value={value}
+              timelineProps={{
+                items: timelineItems,
+                page: timelinePage,
+                pageSize: timelinePageSize,
+                total: timelineTotal,
+                loading: timelineLoading,
+                onPrev: () => void loadTimelinePage(Math.max(0, timelinePage - 1)),
+                onNext: () => void loadTimelinePage(timelinePage + 1),
+              }}
+            />
+          ) : editJson || isLogline ? (
             <textarea
               aria-label={isLogline ? "logline" : section}
               rows={isLogline ? 4 : 16}
@@ -495,20 +546,10 @@ export function BiblePage({ projectId }: Props) {
               disabled={Boolean(blockMeta?.locked)}
             />
           ) : (
-            <ReadableSection
-              section={section}
-              value={value}
-              timelineProps={{
-                items: timelineItems,
-                hasMore: timelineHasMore,
-                loading: timelineLoading,
-                onLoadMore: () => void loadTimeline(false),
-                total: timelineTotal,
-              }}
-            />
+            <ReadableSection section={section} value={value} />
           )}
 
-          {(editJson || isLogline) && (
+          {(editJson || isLogline) && section !== "timeline" && (
             <div className="row">
               <button
                 type="button"

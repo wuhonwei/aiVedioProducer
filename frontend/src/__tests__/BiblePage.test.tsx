@@ -21,6 +21,14 @@ describe("BiblePage", () => {
         },
       ],
     });
+    vi.mocked(api.getBibleMeta).mockResolvedValue({ blocks: {} });
+    vi.mocked(api.getTimeline).mockResolvedValue({
+      items: [],
+      offset: 0,
+      limit: 20,
+      total_count: 0,
+      has_more: false,
+    });
     vi.mocked(api.patchBible).mockResolvedValue({});
   });
 

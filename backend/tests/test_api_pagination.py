@@ -12,6 +12,7 @@ def test_timeline_and_shots_pagination(tmp_path):
         data_root=tmp_path,
         db_url=f"sqlite:///{tmp_path / 'a.db'}",
         api_page_size=50,
+        timeline_page_size=50,
     )
     app = create_app(settings)
     client = TestClient(app)
@@ -33,6 +34,34 @@ def test_timeline_and_shots_pagination(tmp_path):
     r2 = client.get(f"/api/projects/{pid}/timeline?offset=50&limit=50")
     assert len(r2.json()["items"]) == 30
     assert r2.json()["has_more"] is False
+
+    # Bible GET must not inline all 80 timeline rows
+    auto = {
+        "logline": "x",
+        "characters": [],
+        "project_meta": {"title": "X"},
+        "timeline": events,
+        "timeline_ref": {"total_count": 80, "page_size": 50},
+    }
+    for k in [
+        "worldbuilding",
+        "plot_structure",
+        "character_relations",
+        "locations",
+        "factions",
+        "props",
+        "foreshadowing",
+        "adaptation_notes",
+        "visual_style",
+        "character_visuals",
+        "voice_bible",
+        "production_constraints",
+    ]:
+        auto.setdefault(k, [] if k != "worldbuilding" else {})
+    paths.auto_bible_json.write_text(json.dumps(auto, ensure_ascii=False), encoding="utf-8")
+    bible = client.get(f"/api/projects/{pid}/bible").json()
+    assert len(bible["timeline"]) == 50
+    assert bible["timeline_ref"]["total_count"] == 80
 
     shots = [
         {
