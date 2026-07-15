@@ -20,3 +20,9 @@ docs/novels/
 Thumbs.db
 
 .worktrees/
+
+.tools/
+
+gh_windows_amd64.zip
+
+gh_cli.msi
