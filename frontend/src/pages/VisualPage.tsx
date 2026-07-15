@@ -12,6 +12,15 @@ import {
 
 type Props = { projectId: string };
 
+const PROBE_FRAMING = "半身中景，国风光影";
+
+/** Scene/framing prompt for t2i probe; prefer character look text when available. */
+export function defaultProbePrompt(c: Pick<VisualCharacter, "name" | "prompt_zh">): string {
+  const look = (c.prompt_zh || "").trim();
+  if (look) return `${look}，${PROBE_FRAMING}`;
+  return `${c.name}，${PROBE_FRAMING}`;
+}
+
 export function VisualPage({ projectId }: Props) {
   const [chars, setChars] = useState<VisualCharacter[]>([]);
   const [backend, setBackend] = useState("stub");
@@ -19,7 +28,7 @@ export function VisualPage({ projectId }: Props) {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [probePrompt, setProbePrompt] = useState("站在江雾渡口，中景");
+  const [probePrompt, setProbePrompt] = useState("");
   const [probeResult, setProbeResult] = useState<string | null>(null);
 
   const refresh = async () => {
@@ -52,6 +61,12 @@ export function VisualPage({ projectId }: Props) {
     }
     setSelected(next);
   }, [active]);
+
+  useEffect(() => {
+    if (!active) return;
+    setProbePrompt(defaultProbePrompt(active));
+    setProbeResult(null);
+  }, [active?.character_id, active?.prompt_zh, active?.name]);
 
   const pollJob = async (jobId: string) => {
     for (let i = 0; i < 120; i++) {
@@ -232,7 +247,7 @@ export function VisualPage({ projectId }: Props) {
 
               <div className="stack" style={{ marginTop: 8 }}>
                 <label className="field">
-                  试生成 prompt
+                  试生成 prompt（含角色定妆；trigger 仍会自动附加）
                   <input
                     value={probePrompt}
                     onChange={(e) => setProbePrompt(e.target.value)}

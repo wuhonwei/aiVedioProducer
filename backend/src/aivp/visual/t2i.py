@@ -22,9 +22,11 @@ def generate_with_character(
         raise FileNotFoundError(f"profile_missing:{character_id}")
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
     trigger = profile.get("trigger") or ""
+    look = (profile.get("prompt_zh") or "").strip()
     full_prompt = f"{trigger}, {prompt}" if trigger else prompt
-    if profile.get("prompt_zh"):
-        full_prompt = f"{full_prompt}, {profile['prompt_zh']}"
+    # Avoid duplicating look text when the UI already embedded prompt_zh in `prompt`.
+    if look and look not in full_prompt:
+        full_prompt = f"{full_prompt}, {look}"
     out_dir = vpaths.character_dir(character_id) / "generations"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
