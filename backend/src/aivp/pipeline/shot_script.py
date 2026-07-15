@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from aivp.jobs.control import JobCancelled
-
+from aivp.pipeline.shot_upgrade import (
+    build_asset_plan,
+    save_asset_plan,
+    upgrade_shot_document,
+    upgrade_shot_to_v2,
+    write_shot_yamls,
+)
 SHOT_SYSTEM = (
     "You are a guofeng anime storyboard director. Output strict JSON object with key "
     '"shots" (array). Each shot must include: event_id, order, shot_type, camera, '
@@ -105,13 +111,15 @@ def coerce_shot(raw: Any, event: dict, order_fallback: int) -> dict | None:
         return None
     cast = raw.get("cast") if isinstance(raw.get("cast"), list) else event.get("cast") or []
     cast_names = [_text(c) for c in cast if _text(c)]
-    return {
+    base = {
         "shot_id": _text(raw.get("shot_id")) or f"sh_{event_id}_{order:02d}",
         "event_id": event_id,
         "chapter_id": _text(raw.get("chapter_id") or event.get("chapter_id")),
         "order": order,
         "shot_type": _text(raw.get("shot_type")) or "medium",
-        "camera": _text(raw.get("camera") or event.get("camera_hint")) or "中景",
+        "camera": raw.get("camera") if isinstance(raw.get("camera"), dict) else (
+            _text(raw.get("camera") or event.get("camera_hint")) or "中景"
+        ),
         "action": action,
         "dialogue": _text(raw.get("dialogue")),
         "duration_sec": int(raw.get("duration_sec") or event.get("duration_hint_sec") or 3),
@@ -120,6 +128,7 @@ def coerce_shot(raw: Any, event: dict, order_fallback: int) -> dict | None:
         "cast": cast_names,
         "location_name": _text(raw.get("location_name")),
     }
+    return upgrade_shot_to_v2(base, order)
 
 
 def build_event_payload(events: list[dict], assets: dict | None) -> list[dict]:
@@ -221,13 +230,15 @@ def expand_events_with_llm(
         if on_progress:
             on_progress(done, total)
 
-    # Stable shot_id rewrite
+    # Stable shot_id rewrite + v2 upgrade
+    upgraded: list[dict] = []
     for i, shot in enumerate(shots, start=1):
         eid = shot.get("event_id") or "evt"
         order = int(shot.get("order") or 1)
         shot["shot_id"] = f"sh_{eid}_{order:02d}"
         shot["global_order"] = i
-    return shots, warnings
+        upgraded.append(upgrade_shot_to_v2(shot, i))
+    return upgraded, warnings
 
 
 def run_shot_script(
@@ -276,7 +287,7 @@ def run_shot_script(
         raise RuntimeError(warnings[0])
 
     doc = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "model": getattr(llm, "model", "unknown"),
         "event_count": len(events),
@@ -284,8 +295,20 @@ def run_shot_script(
         "shots": shots,
         "warnings": warnings,
     }
+    doc = upgrade_shot_document(doc)
     paths.shot_script_dir.mkdir(parents=True, exist_ok=True)
     paths.shot_script_json.write_text(
         json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    try:
+        write_shot_yamls(paths.shots_dir, doc["shots"])
+    except RuntimeError:
+        warnings.append("yaml_export_skipped_missing_pyyaml")
+        doc["warnings"] = warnings
+        paths.shot_script_json.write_text(
+            json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    plan = build_asset_plan(doc["shots"], approved_only=False)
+    save_asset_plan(paths.asset_plan_json, plan)
+    doc["asset_plan_path"] = str(paths.asset_plan_json)
     return doc

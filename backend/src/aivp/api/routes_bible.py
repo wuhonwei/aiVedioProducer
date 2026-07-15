@@ -3,16 +3,35 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from aivp.api.deps import get_db, get_settings
 from aivp.bible.export_md import export_version
+from aivp.bible.meta import (
+    ensure_bible_meta,
+    persist_merged_bible,
+    set_block_lock,
+    set_block_review,
+)
 from aivp.bible.overlay import apply_merge_patch, merge_bible
 from aivp.config import Settings
 from aivp.models import Project
 from aivp.paths import ProjectPaths
+from aivp.schemas import REQUIRED_BIBLE_KEYS
 
 router = APIRouter(tags=["bible"])
+
+
+class ReviewBody(BaseModel):
+    block: str
+    action: str = Field(description="approve|reject|needs_review|draft")
+    note: str = ""
+
+
+class LockBody(BaseModel):
+    block: str
+    locked: bool = True
 
 
 def _load_json(path) -> dict[str, Any]:
@@ -28,6 +47,15 @@ def _require_project(db: Session, project_id: str) -> Project:
     return project
 
 
+def _persist(paths: ProjectPaths) -> tuple[dict[str, Any], dict[str, Any]]:
+    return persist_merged_bible(
+        auto_path=paths.auto_bible_json,
+        overlay_path=paths.overlay_json,
+        merged_path=paths.merged_bible_json,
+        meta_path=paths.bible_meta_json,
+    )
+
+
 @router.get("/projects/{project_id}/bible")
 def get_bible(
     project_id: str,
@@ -40,7 +68,22 @@ def get_bible(
     overlay = _load_json(paths.overlay_json)
     if not auto and not overlay:
         raise HTTPException(status_code=404, detail="Story bible not available yet")
-    return merge_bible(auto, overlay)
+    merged, _meta = _persist(paths)
+    return merged
+
+
+@router.get("/projects/{project_id}/bible/meta")
+def get_bible_meta(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    paths = ProjectPaths(settings.data_root, project_id)
+    if not paths.auto_bible_json.exists() and not paths.overlay_json.exists():
+        raise HTTPException(status_code=404, detail="Story bible not available yet")
+    _, meta = _persist(paths)
+    return meta
 
 
 @router.patch("/projects/{project_id}/bible")
@@ -53,14 +96,68 @@ def patch_bible(
     _require_project(db, project_id)
     paths = ProjectPaths(settings.data_root, project_id)
     paths.ensure()
+    meta = ensure_bible_meta(_load_json(paths.bible_meta_json) or None)
+    for key in patch:
+        if key in REQUIRED_BIBLE_KEYS and meta["blocks"].get(key, {}).get("locked"):
+            raise HTTPException(status_code=409, detail=f"Block locked: {key}")
     overlay = _load_json(paths.overlay_json)
     updated = apply_merge_patch(overlay, patch)
     paths.overlay_json.write_text(
         json.dumps(updated, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    auto = _load_json(paths.auto_bible_json)
-    return merge_bible(auto, updated)
+    merged, _ = _persist(paths)
+    return merged
+
+
+@router.post("/projects/{project_id}/bible/review")
+def review_bible_block(
+    project_id: str,
+    body: ReviewBody,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    if body.block not in REQUIRED_BIBLE_KEYS:
+        raise HTTPException(status_code=400, detail=f"Unknown block: {body.block}")
+    paths = ProjectPaths(settings.data_root, project_id)
+    meta = ensure_bible_meta(_load_json(paths.bible_meta_json) or None)
+    try:
+        meta = set_block_review(meta, block=body.block, action=body.action, note=body.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    paths.bible_meta_json.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return meta
+
+
+@router.post("/projects/{project_id}/bible/lock")
+def lock_bible_block(
+    project_id: str,
+    body: LockBody,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    if body.block not in REQUIRED_BIBLE_KEYS:
+        raise HTTPException(status_code=400, detail=f"Unknown block: {body.block}")
+    paths = ProjectPaths(settings.data_root, project_id)
+    meta = ensure_bible_meta(_load_json(paths.bible_meta_json) or None)
+    # Snapshot current merged content into overlay when locking so auto can't wipe it.
+    if body.locked:
+        merged, _ = _persist(paths)
+        overlay = _load_json(paths.overlay_json)
+        overlay[body.block] = merged.get(body.block)
+        paths.overlay_json.write_text(
+            json.dumps(overlay, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    meta = set_block_lock(meta, block=body.block, locked=body.locked)
+    paths.bible_meta_json.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _persist(paths)
+    return meta
 
 
 @router.post("/projects/{project_id}/exports")
@@ -75,7 +172,7 @@ def create_export(
     overlay = _load_json(paths.overlay_json)
     if not auto and not overlay:
         raise HTTPException(status_code=404, detail="Story bible not available yet")
-    bible = merge_bible(auto, overlay)
+    bible, _ = _persist(paths)
     version = int(project.export_version or 0) + 1
     export_version(paths.exports_dir, bible, version)
     project.export_version = version
@@ -84,6 +181,7 @@ def create_export(
         "version": version,
         "json_url": f"/api/projects/{project_id}/exports/{version}/json",
         "md_url": f"/api/projects/{project_id}/exports/{version}/md",
+        "pack_dir": f"story_bible.v{version:03d}_pack",
     }
 
 

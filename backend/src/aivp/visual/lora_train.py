@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,7 +78,8 @@ def run_lora_train(
         character_id=character_id,
     )
     result["command"] = cmd
-    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+    argv = shlex.split(cmd, posix=False)
+    proc = subprocess.run(argv, shell=False, capture_output=True, text=True, check=False)
     result["returncode"] = proc.returncode
     result["stdout"] = (proc.stdout or "")[-2000:]
     result["stderr"] = (proc.stderr or "")[-2000:]

@@ -10,10 +10,24 @@ class ProjectPaths:
         self.exports_dir = self.root / "exports"
         self.source_txt = self.raw_dir / "source.txt"
         self.clean_txt = self.stages_dir / "01_clean" / "cleaned.txt"
+        self.clean_metadata_json = self.stages_dir / "01_clean" / "metadata.json"
+        self.clean_report_json = self.stages_dir / "01_clean" / "clean_report.json"
         self.chapters_json = self.stages_dir / "02_chapters" / "chapters.json"
+        self.chapter_report_json = self.stages_dir / "02_chapters" / "chapter_report.json"
         self.chunks_jsonl = self.stages_dir / "03_chunks" / "chunks.jsonl"
+        self.chunk_report_json = self.stages_dir / "03_chunks" / "chunk_report.json"
         self.extract_dir = self.stages_dir / "04_extract"
+        self.extract_report_json = self.extract_dir / "extract_report.json"
+        self.extract_errors_json = self.extract_dir / "errors.json"
         self.entities_json = self.stages_dir / "05_normalize" / "entities.json"
+        self.normalize_dir = self.stages_dir / "05_normalize"
+        self.uncertain_entities_json = self.normalize_dir / "uncertain_entities.json"
+        self.candidate_pairs_json = self.normalize_dir / "candidate_pairs.json"
+        self.normalize_report_json = self.normalize_dir / "normalize_report.json"
+        self.merged_bible_json = self.stages_dir / "09_bible" / "story_bible.merged.json"
+        self.bible_meta_json = self.stages_dir / "09_bible" / "story_bible.meta.json"
+        self.asset_plan_json = self.root / "assets" / "asset_plan.json"
+        self.shots_dir = self.root / "shots"
         self.enrich_dir = self.stages_dir / "06_enrich_assets"
         self.majors_json = self.enrich_dir / "majors.json"
         self.assets_json = self.enrich_dir / "assets.json"
@@ -40,6 +54,8 @@ class ProjectPaths:
             self.shot_script_dir,
             self.overlays_dir,
             self.exports_dir,
+            self.root / "assets",
+            self.shots_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 

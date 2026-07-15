@@ -6,9 +6,11 @@ from sqlalchemy.orm import sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from aivp.api.routes_bible import router as bible_router
+from aivp.api.routes_entities import router as entities_router
 from aivp.api.routes_health import router as health_router
 from aivp.api.routes_jobs import router as jobs_router
 from aivp.api.routes_projects import router as projects_router
+from aivp.api.routes_reports import router as reports_router
 from aivp.api.routes_shots import router as shots_router
 from aivp.api.routes_visual import router as visual_router
 from aivp.config import Settings
@@ -75,5 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(bible_router, prefix="/api")
     app.include_router(shots_router, prefix="/api")
     app.include_router(visual_router, prefix="/api")
+    app.include_router(reports_router, prefix="/api")
+    app.include_router(entities_router, prefix="/api")
     app.include_router(health_router, prefix="/api")
     return app

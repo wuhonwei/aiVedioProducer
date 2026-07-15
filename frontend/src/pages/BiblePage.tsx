@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { getBible, patchBible } from "../api/client";
+import {
+  getBible,
+  getBibleMeta,
+  lockBibleBlock,
+  patchBible,
+  reviewBibleBlock,
+  type BibleMeta,
+} from "../api/client";
 
 const BIBLE_SECTIONS: { key: string; title: string }[] = [
   { key: "project_meta", title: "1. 项目元信息" },
@@ -230,11 +237,21 @@ function ReadableSection({ section, value }: { section: string; value: unknown }
 
 export function BiblePage({ projectId }: Props) {
   const [bible, setBible] = useState<Record<string, unknown>>({});
+  const [meta, setMeta] = useState<BibleMeta | null>(null);
   const [section, setSection] = useState("logline");
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editJson, setEditJson] = useState(false);
+
+  const refreshMeta = async () => {
+    try {
+      const m = await getBibleMeta(projectId);
+      setMeta(m);
+    } catch {
+      setMeta(null);
+    }
+  };
 
   useEffect(() => {
     void (async () => {
@@ -245,6 +262,7 @@ export function BiblePage({ projectId }: Props) {
         setDraft(formatValue(data.logline));
         setSection("logline");
         setEditJson(false);
+        await refreshMeta();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -257,6 +275,7 @@ export function BiblePage({ projectId }: Props) {
   }, [section, bible]);
 
   const value = bible[section];
+  const blockMeta = meta?.blocks?.[section];
   const supportsCards = useMemo(
     () =>
       ASSET_KEYS.has(section) ||
@@ -275,10 +294,31 @@ export function BiblePage({ projectId }: Props) {
       const updated = await patchBible(projectId, patch);
       setBible((prev) => ({ ...prev, ...updated, ...patch }));
       setEditJson(false);
+      await refreshMeta();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const onReview = async (action: string) => {
+    setError(null);
+    try {
+      const m = await reviewBibleBlock(projectId, { block: section, action });
+      setMeta(m);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const onLock = async (locked: boolean) => {
+    setError(null);
+    try {
+      const m = await lockBibleBlock(projectId, { block: section, locked });
+      setMeta(m);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -288,22 +328,26 @@ export function BiblePage({ projectId }: Props) {
     <section className="panel">
       <h2>Story Bible</h2>
       <p className="panel-lead">
-        默认按资产卡阅读；需要改结构化字段时切换「编辑 JSON」，保存只写入 overlay。
+        默认按资产卡阅读；需要改结构化字段时切换「编辑 JSON」，保存只写入 overlay。区块可审核/锁定。
       </p>
       <div className="bible-layout">
         <nav aria-label="bible-sections">
           <ul className="bible-nav">
-            {BIBLE_SECTIONS.map((s) => (
-              <li key={s.key}>
-                <button
-                  type="button"
-                  aria-current={section === s.key ? "page" : undefined}
-                  onClick={() => setSection(s.key)}
-                >
-                  {s.title}
-                </button>
-              </li>
-            ))}
+            {BIBLE_SECTIONS.map((s) => {
+              const st = meta?.blocks?.[s.key]?.review_status;
+              return (
+                <li key={s.key}>
+                  <button
+                    type="button"
+                    aria-current={section === s.key ? "page" : undefined}
+                    onClick={() => setSection(s.key)}
+                  >
+                    {s.title}
+                    {st ? ` · ${st}` : ""}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </nav>
         <div className="stack">
@@ -323,6 +367,28 @@ export function BiblePage({ projectId }: Props) {
             )}
           </div>
 
+          {blockMeta && (
+            <p className="note" aria-label="block-review-status">
+              状态：{blockMeta.review_status}
+              {blockMeta.locked ? "（已锁定）" : ""}
+            </p>
+          )}
+
+          <div className="row">
+            <button type="button" className="btn btn-secondary" onClick={() => void onReview("approve")}>
+              通过
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => void onReview("reject")}>
+              需修改
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => void onLock(true)}>
+              锁定
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => void onLock(false)}>
+              解锁
+            </button>
+          </div>
+
           {editJson || isLogline ? (
             <textarea
               aria-label={isLogline ? "logline" : section}
@@ -334,6 +400,7 @@ export function BiblePage({ projectId }: Props) {
               }
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              disabled={Boolean(blockMeta?.locked)}
             />
           ) : (
             <ReadableSection section={section} value={value} />
@@ -344,7 +411,7 @@ export function BiblePage({ projectId }: Props) {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={saving}
+                disabled={saving || Boolean(blockMeta?.locked)}
                 onClick={() => void onSave()}
               >
                 {saving ? "保存中…" : "保存"}

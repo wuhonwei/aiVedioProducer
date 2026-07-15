@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     db_url: str = "sqlite:///./data/aivp.db"
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:14b"
-    chunk_size: int = 1200
-    chunk_overlap: int = 150
+    chunk_size: int = 4000
+    chunk_overlap: int = 500
     extract_max_retries: int = 2
     skip_bad_chunks: bool = True
     enrich_top_characters: int = 8

@@ -304,7 +304,7 @@ def assemble_bible(
     max_chars = min(max(max_cast, 2), 5)
 
     bible = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_stats": {
             "chapter_count": len(chapters),
@@ -399,5 +399,13 @@ def run_assemble(
     paths.auto_bible_json.write_text(
         json.dumps(bible, ensure_ascii=False, indent=2),
         encoding="utf-8",
+    )
+    from aivp.bible.meta import persist_merged_bible
+
+    persist_merged_bible(
+        auto_path=paths.auto_bible_json,
+        overlay_path=paths.overlay_json,
+        merged_path=paths.merged_bible_json,
+        meta_path=paths.bible_meta_json,
     )
     return bible

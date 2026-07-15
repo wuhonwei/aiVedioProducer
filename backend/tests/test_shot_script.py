@@ -40,7 +40,9 @@ def test_expand_events_produces_shots_with_fake_llm():
     shots, warnings = expand_events_with_llm(events, None, llm, batch_size=4)
     assert not warnings
     assert len(shots) == 1
-    assert shots[0]["shot_id"].startswith("sh_evt0001_")
+    assert shots[0]["shot_id"].startswith("EP001_")
+    assert shots[0]["assets_required"]["characters"]
+    assert shots[0]["review"]["status"] == "needs_review"
     assert shots[0]["visual_prompt"]
 
 

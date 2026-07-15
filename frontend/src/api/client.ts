@@ -114,6 +114,43 @@ export const cancelJob = (projectId: string, jobId: string) =>
 export const getBible = (projectId: string) =>
   req<Record<string, unknown>>(`/api/projects/${projectId}/bible`);
 
+export type BibleBlockMeta = {
+  block: string;
+  review_status: string;
+  locked?: boolean;
+  notes?: Array<{ note?: string }>;
+  source_refs?: unknown[];
+};
+
+export type BibleMeta = {
+  schema_version?: number;
+  blocks: Record<string, BibleBlockMeta>;
+  reviews?: unknown[];
+};
+
+export const getBibleMeta = (projectId: string) =>
+  req<BibleMeta>(`/api/projects/${projectId}/bible/meta`);
+
+export const reviewBibleBlock = (
+  projectId: string,
+  body: { block: string; action: string; note?: string },
+) =>
+  req<BibleMeta>(`/api/projects/${projectId}/bible/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+export const lockBibleBlock = (
+  projectId: string,
+  body: { block: string; locked: boolean },
+) =>
+  req<BibleMeta>(`/api/projects/${projectId}/bible/lock`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
 export const patchBible = (projectId: string, patch: Record<string, unknown>) =>
   req<Record<string, unknown>>(`/api/projects/${projectId}/bible`, {
     method: "PATCH",
@@ -134,7 +171,48 @@ export const getShots = (projectId: string) =>
     shot_count?: number;
     model?: string;
     warnings?: string[];
+    schema_version?: number;
   }>(`/api/projects/${projectId}/shots`);
+
+export const patchShot = (
+  projectId: string,
+  shotId: string,
+  patch: Record<string, unknown>,
+) =>
+  req<Record<string, unknown>>(`/api/projects/${projectId}/shots/${shotId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+
+export const reviewShot = (
+  projectId: string,
+  shotId: string,
+  body: { status: string; note?: string },
+) =>
+  req<Record<string, unknown>>(`/api/projects/${projectId}/shots/${shotId}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+export const exportShotsYaml = (projectId: string) =>
+  req<{ count: number; root: string }>(`/api/projects/${projectId}/shots/export-yaml`, {
+    method: "POST",
+  });
+
+export const getAssetPlan = (projectId: string) =>
+  req<{
+    characters?: Array<Record<string, unknown>>;
+    locations?: Array<Record<string, unknown>>;
+    props?: Array<Record<string, unknown>>;
+  }>(`/api/projects/${projectId}/assets/plan`);
+
+export const regenerateAssetPlan = (projectId: string, approvedOnly = false) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/assets/plan/regenerate?approved_only=${approvedOnly}`,
+    { method: "POST" },
+  );
 
 export type VisualCharacter = {
   character_id: string;

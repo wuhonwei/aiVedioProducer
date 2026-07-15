@@ -31,7 +31,7 @@ def test_assemble_includes_all_16_keys():
     assert bible["warnings"] == ["skip:ch001/0002"]
     assert bible["logline"]
     assert bible["worldbuilding"]["summary"]
-    assert bible["schema_version"] == 2
+    assert bible["schema_version"] == 3
     assert bible["source_stats"].get("video_ready") is True
 
 
