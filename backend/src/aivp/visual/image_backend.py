@@ -149,7 +149,7 @@ class ComfyImageBackend:
             raise RuntimeError(
                 "comfy_checkpoint_empty: set AIVP_COMFY_CHECKPOINT to your "
                 "checkpoint filename under ComfyUI/models/checkpoints "
-                "(e.g. GuoFeng4.2Fp16.safetensors)"
+                "(e.g. Guofeng4.2XL.safetensors)"
             )
 
         client_id = uuid.uuid4().hex

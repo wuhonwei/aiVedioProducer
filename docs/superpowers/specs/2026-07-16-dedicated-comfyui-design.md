@@ -26,12 +26,12 @@ Repo commits scripts + docs + `.env.example` only. Comfy source and weights stay
 
 - `AIVP_IMAGE_BACKEND=comfy`
 - `AIVP_COMFY_BASE_URL=http://127.0.0.1:8190`
-- `AIVP_COMFY_CHECKPOINT=GuoFeng4.2Fp16.safetensors`
+- `AIVP_COMFY_CHECKPOINT=Guofeng4.2XL.safetensors`
 
 ## One-time local setup
 
 1. Clone ComfyUI into `tools/ComfyUI` and install its Python deps (CUDA torch as needed).
-2. Place `GuoFeng4.2Fp16.safetensors` under `tools/ComfyUI/models/checkpoints/` (copy or directory junction from a shared disk is OK; instance remains this one).
+2. Place `Guofeng4.2XL.safetensors` under `tools/ComfyUI/models/checkpoints/` (copy or hardlink from shared weights is OK; do not reuse the old Comfy process).
 3. Start Comfy with `scripts/start-comfy.ps1`, then the AIVP backend; probe / 试生成 uses this instance.
 
 ## Out of scope

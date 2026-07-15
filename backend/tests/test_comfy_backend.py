@@ -11,12 +11,12 @@ from aivp.visual.image_backend import (
 
 def test_build_sdxl_workflow_embeds_checkpoint_and_prompts():
     wf = build_sdxl_txt2img_workflow(
-        checkpoint="GuoFeng4.2Fp16.safetensors",
+        checkpoint="Guofeng4.2XL.safetensors",
         prompt="lin_aivp, 少年青衣",
         negative="blurry",
         seed=42,
     )
-    assert wf["4"]["inputs"]["ckpt_name"] == "GuoFeng4.2Fp16.safetensors"
+    assert wf["4"]["inputs"]["ckpt_name"] == "Guofeng4.2XL.safetensors"
     assert wf["6"]["inputs"]["text"] == "lin_aivp, 少年青衣"
     assert wf["7"]["inputs"]["text"] == "blurry"
     assert wf["3"]["inputs"]["seed"] == 42
@@ -77,11 +77,11 @@ def test_comfy_generate_downloads_image(tmp_path: Path, monkeypatch):
         def post(self, url, json=None):
             calls["n"] += 1
             assert url.endswith("/prompt")
-            assert json["prompt"]["4"]["inputs"]["ckpt_name"] == "GuoFeng4.2Fp16.safetensors"
+            assert json["prompt"]["4"]["inputs"]["ckpt_name"] == "Guofeng4.2XL.safetensors"
             return FakeResponse(200, {"prompt_id": "pid1"})
 
     monkeypatch.setattr(httpx, "Client", FakeClient)
-    backend = ComfyImageBackend("http://127.0.0.1:8188", "GuoFeng4.2Fp16.safetensors")
+    backend = ComfyImageBackend("http://127.0.0.1:8188", "Guofeng4.2XL.safetensors")
     out = backend.generate(prompt="test", negative="bad", dest=dest, seed=1)
     assert out.exists()
     assert out.read_bytes() == png_bytes
