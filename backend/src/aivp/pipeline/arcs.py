@@ -10,23 +10,6 @@ def _norm(text: str) -> str:
     return _PUNCT.sub("", _STRIP.sub("", (text or "").strip()))
 
 
-def _loosely_covered(piece: str, blob: str) -> bool:
-    a, b = _norm(piece), _norm(blob)
-    if not a:
-        return True
-    if a in b:
-        return True
-    if len(a) >= 6 and (a[:6] in b or a[-6:] in b):
-        return True
-    # Shared core nouns/verbs of length >=2 — if most appear in blob, treat covered.
-    cores = [a[i : i + 2] for i in range(len(a) - 1)]
-    if len(cores) >= 3:
-        hit = sum(1 for c in cores if c in b)
-        if hit / len(cores) >= 0.65:
-            return True
-    return False
-
-
 def _uniq_join(parts: list[str], *, sep: str = "；", limit: int = 12) -> str:
     out: list[str] = []
     seen: set[str] = set()
@@ -70,9 +53,10 @@ def build_arcs(
         event_sums = [str(s) for s in by_ch_events.get(cid, []) if str(s).strip()]
 
         if extracts:
-            blob = "；".join(extracts)
-            extras = [ev for ev in event_sums if not _loosely_covered(ev, blob)]
-            summary = _uniq_join([*extracts, *extras], limit=10)
+            # Extract chunk summaries already follow reading order and often span
+            # the whole chapter. Do not append timeline one-liners after them —
+            # that puts mid-chapter beats after an ending that the extract already stated.
+            summary = _uniq_join(extracts, limit=10)
         else:
             summary = _uniq_join(event_sums, limit=12)
 
