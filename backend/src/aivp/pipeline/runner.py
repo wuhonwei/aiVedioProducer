@@ -270,7 +270,12 @@ def run_job(
                     index_json=paths.timeline_index_json,
                 )
             elif step == "08_arcs":
-                run_arcs(paths.chapters_json, paths.events_json, paths.arcs_json)
+                run_arcs(
+                    paths.chapters_json,
+                    paths.events_json,
+                    paths.arcs_json,
+                    extract_dir=paths.extract_dir,
+                )
             elif step == "09_bible":
                 run_assemble(
                     paths,
