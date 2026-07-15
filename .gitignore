@@ -23,6 +23,9 @@ Thumbs.db
 
 .tools/
 
+# Project-only ComfyUI install (native; do not commit)
+tools/ComfyUI/
+
 gh_windows_amd64.zip
 
 gh_cli.msi

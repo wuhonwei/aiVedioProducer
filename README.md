@@ -10,11 +10,11 @@
 - Story Bible 自动生成 + overlay 人工编辑与导出
 - 分镜初步生成（DeepSeek / 启发式回退）
 - 角色视觉候选图 stub、LoRA 训练包生成
+- 本仓库专用 ComfyUI（`tools/ComfyUI`，端口 8190）文生图 API
 - 项目 / 流水线 / Bible / 分镜 / 角色视觉 / 导出 / 设置控制台
 
 **尚未支持（Phase 4～6）**
 
-- 真实 ComfyUI 图像生成 workflow
 - LTX / 其他 I2V 视频生成
 - TTS 音频
 - FFmpeg 成片
@@ -25,6 +25,7 @@
 - **Node.js 18+**
 - **Ollama**（可选）：默认 `http://127.0.0.1:11434`，模型 `qwen2.5:14b`
 - **DeepSeek API**（可选）：分镜生成；未配置时使用启发式回退
+- **本项目 ComfyUI**（试生成 / 真图）：独立安装，**不要**共用其它项目的 8188 实例。见 `scripts/setup-comfy.md`，启动：`.\scripts\start-comfy.ps1`（`http://127.0.0.1:8190`）
 
 ## 环境检查
 
