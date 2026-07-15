@@ -249,8 +249,18 @@ def run_shot_script(
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     force: bool = False,
+    volume_id: str | None = None,
+    chapter_from: str | None = None,
+    chapter_to: str | None = None,
+    event_ids: list[str] | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
-    if not force and paths.shot_script_json.exists():
+    if (
+        not force
+        and paths.shot_script_json.exists()
+        and not (volume_id or chapter_from or chapter_to or event_ids or offset is not None)
+    ):
         existing = json.loads(paths.shot_script_json.read_text(encoding="utf-8"))
         return {**existing, "skipped": True}
 
@@ -275,31 +285,142 @@ def run_shot_script(
             "factions": bible.get("factions") or [],
         }
 
-    shots, warnings = expand_events_with_llm(
-        events,
-        assets,
-        llm,
-        batch_size=settings.shot_batch_size,
-        should_cancel=should_cancel,
-        on_progress=on_progress,
-    )
+    volumes: list[dict] = []
+    if paths.volumes_json.exists():
+        volumes = list(
+            json.loads(paths.volumes_json.read_text(encoding="utf-8")).get("volumes") or []
+        )
+
+    def _filter_events(evs: list[dict], chapter_ids: set[str] | None = None) -> list[dict]:
+        out = list(evs)
+        if event_ids:
+            allow = set(event_ids)
+            out = [e for e in out if e.get("id") in allow]
+        if chapter_ids is not None:
+            out = [e for e in out if e.get("chapter_id") in chapter_ids]
+        elif chapter_from or chapter_to:
+            # Resolve via chapter order in volumes/chapters files if present
+            if paths.chapters_json.exists():
+                from aivp.pipeline.volumes import filter_chapters_by_range
+
+                chapters = json.loads(paths.chapters_json.read_text(encoding="utf-8"))
+                subset = filter_chapters_by_range(
+                    chapters, chapter_from=chapter_from, chapter_to=chapter_to
+                )
+                ids = {c["id"] for c in subset}
+                out = [e for e in out if e.get("chapter_id") in ids]
+        if offset is not None or limit is not None:
+            start = int(offset or 0)
+            end = start + int(limit) if limit is not None else None
+            out = out[start:end]
+        return out
+
+    warnings: list[str] = []
+    all_shots: list[dict] = []
+    volume_entries: list[dict] = []
+
+    use_volumes = bool(volumes) and not (event_ids or offset is not None or limit is not None)
+    if volume_id:
+        volumes = [v for v in volumes if v.get("id") == volume_id]
+        use_volumes = True
+
+    if use_volumes and volumes:
+        # Progress across volumes
+        total_vols = len(volumes)
+        for vi, vol in enumerate(volumes, start=1):
+            if should_cancel and should_cancel():
+                raise JobCancelled("shot_script")
+            ch_ids = set(vol.get("chapter_ids") or [])
+            vol_events = _filter_events(events, chapter_ids=ch_ids)
+            vol_path = paths.shot_script_volume_json(vol["id"])
+            if not force and vol_path.exists() and not (chapter_from or chapter_to):
+                vol_doc = json.loads(vol_path.read_text(encoding="utf-8"))
+                vol_shots = list(vol_doc.get("shots") or [])
+                warnings.append(f"shot_volume_skipped_existing:{vol['id']}")
+            else:
+                vol_shots, vol_warn = expand_events_with_llm(
+                    vol_events,
+                    assets,
+                    llm,
+                    batch_size=settings.shot_batch_size,
+                    should_cancel=should_cancel,
+                    on_progress=None,
+                )
+                warnings.extend(vol_warn)
+                for s in vol_shots:
+                    s["volume_id"] = vol["id"]
+                vol_doc = {
+                    "schema_version": 2,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "model": getattr(llm, "model", "unknown"),
+                    "volume_id": vol["id"],
+                    "event_count": len(vol_events),
+                    "shot_count": len(vol_shots),
+                    "shots": vol_shots,
+                    "warnings": vol_warn,
+                }
+                vol_doc = upgrade_shot_document(vol_doc)
+                paths.shot_script_dir.mkdir(parents=True, exist_ok=True)
+                vol_path.write_text(
+                    json.dumps(vol_doc, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            all_shots.extend(vol_shots)
+            volume_entries.append(
+                {
+                    "id": vol["id"],
+                    "event_count": len(vol_events),
+                    "shot_count": len(vol_shots),
+                    "path": vol_path.name,
+                }
+            )
+            if on_progress:
+                on_progress(vi, total_vols)
+    else:
+        filtered = _filter_events(events)
+        shots, warnings = expand_events_with_llm(
+            filtered,
+            assets,
+            llm,
+            batch_size=settings.shot_batch_size,
+            should_cancel=should_cancel,
+            on_progress=on_progress,
+        )
+        all_shots = shots
+
     if settings.shot_strict and any(w.startswith("shot_batch_failed") for w in warnings):
         raise RuntimeError(warnings[0])
+
+    # Stable global ordering
+    for i, shot in enumerate(all_shots, start=1):
+        shot["global_order"] = i
 
     doc = {
         "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "model": getattr(llm, "model", "unknown"),
         "event_count": len(events),
-        "shot_count": len(shots),
-        "shots": shots,
+        "shot_count": len(all_shots),
+        "shots": all_shots,
         "warnings": warnings,
+        "volumes": volume_entries,
     }
     doc = upgrade_shot_document(doc)
     paths.shot_script_dir.mkdir(parents=True, exist_ok=True)
     paths.shot_script_json.write_text(
         json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    if volume_entries:
+        index = {
+            "schema_version": 2,
+            "generated_at": doc["generated_at"],
+            "event_count": doc["event_count"],
+            "shot_count": doc["shot_count"],
+            "volumes": volume_entries,
+            "warnings": warnings,
+        }
+        paths.shot_script_index_json.write_text(
+            json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     try:
         write_shot_yamls(paths.shots_dir, doc["shots"])
     except RuntimeError:

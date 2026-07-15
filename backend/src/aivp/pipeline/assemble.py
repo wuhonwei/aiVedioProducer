@@ -15,6 +15,12 @@ SYNTH_SYSTEM = (
     "\u7f3a\u4fe1\u606f\u7528\u7a7a\u5b57\u7b26\u4e32\u6216\u7a7a\u6570\u7ec4\u3002\u4e0d\u8981\u8f93\u51fa markdown\u3002"
 )
 
+VOLUME_SYNOPSIS_SYSTEM = (
+    "你是国风长篇责编。根据本卷章节标题与事件摘要，输出严格 JSON："
+    '{"synopsis": string, "key_turns": string[]}。'
+    "synopsis 为本卷剧情浓缩（120-300字），key_turns 为 3-8 个转折点。不要 markdown。"
+)
+
 
 def _names(items: list[dict], key: str = "name") -> list[str]:
     out: list[str] = []
@@ -118,6 +124,60 @@ def _heuristic_relations(characters: list[dict], events: list[dict]) -> list[dic
     return relations
 
 
+def synthesize_volume_synopsis(
+    llm,
+    *,
+    volume: dict,
+    chapters: list[dict],
+    events: list[dict],
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    chapter_ids = set(volume.get("chapter_ids") or [])
+    vol_chapters = [c for c in chapters if c.get("id") in chapter_ids]
+    vol_events = [e for e in events if e.get("chapter_id") in chapter_ids]
+    heuristic = {
+        "volume_id": volume.get("id"),
+        "index": volume.get("index"),
+        "chapter_ids": list(volume.get("chapter_ids") or []),
+        "synopsis": "；".join(
+            str(e.get("summary") or "").strip()
+            for e in vol_events[:12]
+            if str(e.get("summary") or "").strip()
+        )[:400]
+        or "；".join(str(c.get("title") or "") for c in vol_chapters[:8]),
+        "key_turns": [
+            str(e.get("summary") or "").strip()
+            for e in vol_events[:8]
+            if str(e.get("summary") or "").strip()
+        ],
+        "event_count": len(vol_events),
+        "chapter_count": len(vol_chapters),
+    }
+    if llm is None:
+        return heuristic
+    payload = {
+        "volume_id": volume.get("id"),
+        "chapters": [{"id": c.get("id"), "title": c.get("title")} for c in vol_chapters[:40]],
+        "events": [
+            {"id": e.get("id"), "summary": e.get("summary"), "chapter_id": e.get("chapter_id")}
+            for e in vol_events[:60]
+        ],
+    }
+    try:
+        raw = llm.complete_json(
+            VOLUME_SYNOPSIS_SYSTEM,
+            "请为本卷写 synopsis：\n" + json.dumps(payload, ensure_ascii=False)[:12000],
+            should_cancel=should_cancel,
+        )
+        if isinstance(raw.get("synopsis"), str) and raw["synopsis"].strip():
+            heuristic["synopsis"] = raw["synopsis"].strip()
+        if isinstance(raw.get("key_turns"), list) and raw["key_turns"]:
+            heuristic["key_turns"] = [str(x) for x in raw["key_turns"] if str(x).strip()]
+    except Exception:
+        pass
+    return heuristic
+
+
 def synthesize_overview(
     llm,
     *,
@@ -127,29 +187,53 @@ def synthesize_overview(
     events: list[dict],
     arcs: list[dict],
     should_cancel: Callable[[], bool] | None = None,
+    volume_synopses: list[dict] | None = None,
 ) -> dict[str, Any]:
-    payload = {
-        "title": project_name,
-        "chapters": [{"id": c.get("id"), "title": c.get("title")} for c in chapters[:80]],
-        "characters": entities.get("characters", [])[:40],
-        "locations": entities.get("locations", [])[:40],
-        "factions": entities.get("factions", [])[:40],
-        "props": entities.get("props", [])[:40],
-        "arcs": arcs[:40],
-        "events": [
-            {
-                "summary": e.get("summary"),
-                "chapter_id": e.get("chapter_id"),
-                "visual_beat": e.get("visual_beat"),
-            }
-            for e in events[:80]
-        ],
-    }
-    user = (
-        "\u8bf7\u6839\u636e\u4e0b\u5217\u7ed3\u6784\u5316\u7d20\u6750\uff0c"
-        "\u4e3a\u56fd\u98ce\u957f\u7bc7\u5199\u51fa\u6545\u4e8b\u4e00\u53e5\u8bdd\u6982\u62ec\u4e0e\u4e16\u754c\u89c2\u8bbe\u5b9a\uff1a\n"
-        + json.dumps(payload, ensure_ascii=False)[:14000]
-    )
+    if volume_synopses:
+        payload = {
+            "title": project_name,
+            "volume_synopses": [
+                {
+                    "volume_id": s.get("volume_id"),
+                    "synopsis": s.get("synopsis"),
+                    "key_turns": (s.get("key_turns") or [])[:6],
+                    "event_count": s.get("event_count"),
+                }
+                for s in volume_synopses
+            ],
+            "characters": entities.get("characters", [])[:40],
+            "locations": entities.get("locations", [])[:40],
+            "factions": entities.get("factions", [])[:40],
+            "props": entities.get("props", [])[:40],
+            "arcs": arcs[:40],
+        }
+        user = (
+            "请根据各卷 synopsis 与主要实体，写出全书 logline 与世界观设定（勿依赖截断事件列表）：\n"
+            + json.dumps(payload, ensure_ascii=False)[:14000]
+        )
+    else:
+        payload = {
+            "title": project_name,
+            "chapters": [{"id": c.get("id"), "title": c.get("title")} for c in chapters[:80]],
+            "characters": entities.get("characters", [])[:40],
+            "locations": entities.get("locations", [])[:40],
+            "factions": entities.get("factions", [])[:40],
+            "props": entities.get("props", [])[:40],
+            "arcs": arcs[:40],
+            "events": [
+                {
+                    "summary": e.get("summary"),
+                    "chapter_id": e.get("chapter_id"),
+                    "visual_beat": e.get("visual_beat"),
+                }
+                for e in events[:80]
+            ],
+        }
+        user = (
+            "\u8bf7\u6839\u636e\u4e0b\u5217\u7ed3\u6784\u5316\u7d20\u6750\uff0c"
+            "\u4e3a\u56fd\u98ce\u957f\u7bc7\u5199\u51fa\u6545\u4e8b\u4e00\u53e5\u8bdd\u6982\u62ec\u4e0e\u4e16\u754c\u89c2\u8bbe\u5b9a\uff1a\n"
+            + json.dumps(payload, ensure_ascii=False)[:14000]
+        )
     return llm.complete_json(SYNTH_SYSTEM, user, should_cancel=should_cancel)
 
 
@@ -175,6 +259,8 @@ def assemble_bible(
     llm=None,
     should_cancel: Callable[[], bool] | None = None,
     assets: dict | None = None,
+    volume_synopses: list[dict] | None = None,
+    timeline_page_size: int = 50,
 ) -> dict:
     foreshadowing: list = []
     visual_cues: list[str] = []
@@ -203,6 +289,7 @@ def assemble_bible(
                 events=events,
                 arcs=arcs,
                 should_cancel=should_cancel,
+                volume_synopses=volume_synopses,
             )
             if isinstance(synth.get("logline"), str) and synth["logline"].strip():
                 logline = synth["logline"].strip()
@@ -303,12 +390,15 @@ def assemble_bible(
             max_cast = cast_n
     max_chars = min(max(max_cast, 2), 5)
 
+    page_size = max(1, int(timeline_page_size or 50))
+    timeline_preview = events[:page_size]
     bible = {
         "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_stats": {
             "chapter_count": len(chapters),
             "event_count": len(events),
+            "volume_count": len(volume_synopses or []),
             "video_ready": True,
         },
         "warnings": warn,
@@ -322,13 +412,19 @@ def assemble_bible(
         "plot_structure": {
             "arcs": arcs,
             "chapters": [{"id": c["id"], "title": c["title"]} for c in chapters],
+            "volume_synopses": volume_synopses or [],
         },
         "characters": chars,
         "character_relations": relations,
         "locations": merged.get("locations", []),
         "factions": merged.get("factions", []),
         "props": merged.get("props", []),
-        "timeline": events,
+        "timeline": timeline_preview,
+        "timeline_ref": {
+            "total_count": len(events),
+            "page_size": page_size,
+            "preview_count": len(timeline_preview),
+        },
         "foreshadowing": foreshadowing,
         "adaptation_notes": adapt_list,
         "visual_style": {
@@ -371,6 +467,7 @@ def run_assemble(
     warnings: list[str] | None = None,
     llm=None,
     should_cancel: Callable[[], bool] | None = None,
+    timeline_page_size: int = 50,
 ) -> dict:
     chapters = json.loads(paths.chapters_json.read_text(encoding="utf-8"))
     entities = json.loads(paths.entities_json.read_text(encoding="utf-8"))
@@ -383,6 +480,27 @@ def run_assemble(
     assets = None
     if paths.assets_json.exists():
         assets = json.loads(paths.assets_json.read_text(encoding="utf-8"))
+
+    volume_synopses: list[dict] = []
+    if paths.volumes_json.exists():
+        volumes = json.loads(paths.volumes_json.read_text(encoding="utf-8")).get(
+            "volumes"
+        ) or []
+        for vol in volumes:
+            volume_synopses.append(
+                synthesize_volume_synopsis(
+                    llm,
+                    volume=vol,
+                    chapters=chapters,
+                    events=events,
+                    should_cancel=should_cancel,
+                )
+            )
+        paths.volume_synopses_json.write_text(
+            json.dumps(volume_synopses, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     bible = assemble_bible(
         project_name=project_name,
         chapters=chapters,
@@ -394,6 +512,8 @@ def run_assemble(
         llm=llm,
         should_cancel=should_cancel,
         assets=assets,
+        volume_synopses=volume_synopses or None,
+        timeline_page_size=timeline_page_size,
     )
     paths.auto_bible_json.parent.mkdir(parents=True, exist_ok=True)
     paths.auto_bible_json.write_text(

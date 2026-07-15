@@ -14,6 +14,8 @@ export type Job = {
   current_step: string | null;
   chunks_done: number;
   chunks_total: number;
+  volumes_done?: number;
+  volumes_total?: number;
   error_message?: string | null;
   resume_from_step?: string | null;
   force_enrich?: boolean;
@@ -24,6 +26,9 @@ export type StartJobOptions = {
   resumeFromStep?: string | null;
   forceEnrich?: boolean;
   forceShots?: boolean;
+  volumeId?: string | null;
+  chapterFrom?: string | null;
+  chapterTo?: string | null;
 };
 
 export type DeepseekHealth = {
@@ -93,6 +98,9 @@ export const startJob = (projectId: string, options?: StartJobOptions | string |
   if (opts.resumeFromStep != null) body.resume_from_step = opts.resumeFromStep;
   if (opts.forceEnrich) body.force_enrich = true;
   if (opts.forceShots) body.force_shots = true;
+  if (opts.volumeId) body.volume_id = opts.volumeId;
+  if (opts.chapterFrom) body.chapter_from = opts.chapterFrom;
+  if (opts.chapterTo) body.chapter_to = opts.chapterTo;
   return req<Job>(`/api/projects/${projectId}/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -111,8 +119,26 @@ export const cancelJob = (projectId: string, jobId: string) =>
     method: "POST",
   });
 
-export const getBible = (projectId: string) =>
-  req<Record<string, unknown>>(`/api/projects/${projectId}/bible`);
+export const getBible = (projectId: string, sections?: string[]) => {
+  const q =
+    sections && sections.length
+      ? `?sections=${encodeURIComponent(sections.join(","))}`
+      : "";
+  return req<Record<string, unknown>>(`/api/projects/${projectId}/bible${q}`);
+};
+
+export type TimelinePage = {
+  items: Array<Record<string, unknown>>;
+  offset: number;
+  limit: number;
+  total_count: number;
+  has_more: boolean;
+};
+
+export const getTimeline = (projectId: string, offset = 0, limit = 50) =>
+  req<TimelinePage>(
+    `/api/projects/${projectId}/timeline?offset=${offset}&limit=${limit}`,
+  );
 
 export type BibleBlockMeta = {
   block: string;
@@ -165,14 +191,28 @@ export const healthOllama = () => req<OllamaHealth>("/api/health/ollama");
 
 export const healthDeepseek = () => req<DeepseekHealth>("/api/health/deepseek");
 
-export const getShots = (projectId: string) =>
-  req<{
+export const getShots = (
+  projectId: string,
+  options?: { offset?: number; limit?: number; eventId?: string },
+) => {
+  const params = new URLSearchParams();
+  if (options?.offset != null) params.set("offset", String(options.offset));
+  if (options?.limit != null) params.set("limit", String(options.limit));
+  if (options?.eventId) params.set("event_id", options.eventId);
+  const q = params.toString() ? `?${params}` : "";
+  return req<{
     shots?: Array<Record<string, unknown>>;
+    items?: Array<Record<string, unknown>>;
     shot_count?: number;
+    total_count?: number;
+    offset?: number;
+    limit?: number;
+    has_more?: boolean;
     model?: string;
     warnings?: string[];
     schema_version?: number;
-  }>(`/api/projects/${projectId}/shots`);
+  }>(`/api/projects/${projectId}/shots${q}`);
+};
 
 export const patchShot = (
   projectId: string,

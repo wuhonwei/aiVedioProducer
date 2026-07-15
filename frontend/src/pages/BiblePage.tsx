@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   getBible,
   getBibleMeta,
+  getTimeline,
   lockBibleBlock,
   patchBible,
   reviewBibleBlock,
@@ -146,45 +147,97 @@ function AssetCards({ items, kind }: { items: unknown[]; kind: string }) {
   );
 }
 
-function TimelineCards({ items }: { items: unknown[] }) {
-  if (!items.length) return <p className="note">暂无事件。</p>;
+function TimelineCards({
+  items,
+  hasMore,
+  loading,
+  onLoadMore,
+  total,
+}: {
+  items: unknown[];
+  hasMore?: boolean;
+  loading?: boolean;
+  onLoadMore?: () => void;
+  total?: number;
+}) {
+  if (!items.length && !loading) return <p className="note">暂无事件。</p>;
   return (
-    <div className="bible-cards" aria-label="timeline-cards">
-      {items.map((raw, idx) => {
-        const item = asRecord(raw) ?? {};
-        return (
-          <article key={textOf(item.id) || idx} className="bible-card">
-            <header className="bible-card-head">
-              <h4>{textOf(item.summary) || `事件 ${idx + 1}`}</h4>
-              <span className="tier-pill">{textOf(item.chapter_id) || "—"}</span>
-            </header>
-            <dl className="bible-kv">
-              <div>
-                <dt>画面</dt>
-                <dd>{textOf(item.visual_beat) || "—"}</dd>
-              </div>
-              <div>
-                <dt>机位</dt>
-                <dd>{textOf(item.camera_hint) || "—"}</dd>
-              </div>
-              <div>
-                <dt>出场</dt>
-                <dd>{textOf(item.cast) || "—"}</dd>
-              </div>
-            </dl>
-          </article>
-        );
-      })}
+    <div className="stack">
+      {typeof total === "number" && (
+        <p className="note">
+          已显示 {items.length} / {total} 条
+        </p>
+      )}
+      <div className="bible-cards" aria-label="timeline-cards">
+        {items.map((raw, idx) => {
+          const item = asRecord(raw) ?? {};
+          return (
+            <article key={textOf(item.id) || idx} className="bible-card">
+              <header className="bible-card-head">
+                <h4>{textOf(item.summary) || `事件 ${idx + 1}`}</h4>
+                <span className="tier-pill">{textOf(item.chapter_id) || "—"}</span>
+              </header>
+              <dl className="bible-kv">
+                <div>
+                  <dt>画面</dt>
+                  <dd>{textOf(item.visual_beat) || "—"}</dd>
+                </div>
+                <div>
+                  <dt>机位</dt>
+                  <dd>{textOf(item.camera_hint) || "—"}</dd>
+                </div>
+                <div>
+                  <dt>出场</dt>
+                  <dd>{textOf(item.cast) || "—"}</dd>
+                </div>
+              </dl>
+            </article>
+          );
+        })}
+      </div>
+      {hasMore && onLoadMore && (
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={loading}
+          onClick={() => onLoadMore()}
+        >
+          {loading ? "加载中…" : "加载更多"}
+        </button>
+      )}
     </div>
   );
 }
 
-function ReadableSection({ section, value }: { section: string; value: unknown }) {
+function ReadableSection({
+  section,
+  value,
+  timelineProps,
+}: {
+  section: string;
+  value: unknown;
+  timelineProps?: {
+    items: unknown[];
+    hasMore?: boolean;
+    loading?: boolean;
+    onLoadMore?: () => void;
+    total?: number;
+  };
+}) {
   if (ASSET_KEYS.has(section) && Array.isArray(value)) {
     return <AssetCards items={value} kind={section} />;
   }
-  if (section === "timeline" && Array.isArray(value)) {
-    return <TimelineCards items={value} />;
+  if (section === "timeline") {
+    const items = timelineProps?.items ?? (Array.isArray(value) ? value : []);
+    return (
+      <TimelineCards
+        items={items}
+        hasMore={timelineProps?.hasMore}
+        loading={timelineProps?.loading}
+        onLoadMore={timelineProps?.onLoadMore}
+        total={timelineProps?.total}
+      />
+    );
   }
   if (section === "character_visuals" && Array.isArray(value)) {
     return (
@@ -243,6 +296,10 @@ export function BiblePage({ projectId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editJson, setEditJson] = useState(false);
+  const [timelineItems, setTimelineItems] = useState<unknown[]>([]);
+  const [timelineTotal, setTimelineTotal] = useState(0);
+  const [timelineHasMore, setTimelineHasMore] = useState(false);
+  const [timelineLoading, setTimelineLoading] = useState(false);
 
   const refreshMeta = async () => {
     try {
@@ -250,6 +307,29 @@ export function BiblePage({ projectId }: Props) {
       setMeta(m);
     } catch {
       setMeta(null);
+    }
+  };
+
+  const loadTimeline = async (reset = false) => {
+    setTimelineLoading(true);
+    try {
+      const offset = reset ? 0 : timelineItems.length;
+      const page = await getTimeline(projectId, offset, 50);
+      setTimelineItems((prev) => (reset ? page.items : [...prev, ...page.items]));
+      setTimelineTotal(page.total_count);
+      setTimelineHasMore(page.has_more);
+    } catch (e) {
+      // Fall back to bible.timeline preview when dedicated API not ready.
+      if (reset && Array.isArray(bible.timeline)) {
+        setTimelineItems(bible.timeline as unknown[]);
+        const ref = asRecord(bible.timeline_ref);
+        setTimelineTotal(Number(ref?.total_count ?? (bible.timeline as unknown[]).length));
+        setTimelineHasMore(false);
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setTimelineLoading(false);
     }
   };
 
@@ -263,6 +343,18 @@ export function BiblePage({ projectId }: Props) {
         setSection("logline");
         setEditJson(false);
         await refreshMeta();
+        try {
+          const page = await getTimeline(projectId, 0, 50);
+          setTimelineItems(page.items);
+          setTimelineTotal(page.total_count);
+          setTimelineHasMore(page.has_more);
+        } catch {
+          const preview = Array.isArray(data.timeline) ? data.timeline : [];
+          setTimelineItems(preview);
+          const ref = asRecord(data.timeline_ref);
+          setTimelineTotal(Number(ref?.total_count ?? preview.length));
+          setTimelineHasMore(false);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -403,7 +495,17 @@ export function BiblePage({ projectId }: Props) {
               disabled={Boolean(blockMeta?.locked)}
             />
           ) : (
-            <ReadableSection section={section} value={value} />
+            <ReadableSection
+              section={section}
+              value={value}
+              timelineProps={{
+                items: timelineItems,
+                hasMore: timelineHasMore,
+                loading: timelineLoading,
+                onLoadMore: () => void loadTimeline(false),
+                total: timelineTotal,
+              }}
+            />
           )}
 
           {(editJson || isLogline) && (

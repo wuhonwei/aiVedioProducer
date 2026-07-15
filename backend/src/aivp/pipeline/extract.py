@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from aivp.jobs.control import JobCancelled
 from aivp.llm.base import LlmClient
@@ -14,25 +17,33 @@ SYSTEM = (
     "键必须齐全: summary, characters, locations, factions, props, events, "
     "foreshadowing, relationships, visual_cues, visual_candidates, voice_cues, adaptation_notes。"
     "不得编造原文未出现的信息；缺信息用空数组或空字符串。"
+    "下方示例仅说明 JSON 字段形状，禁止照抄示例中的人名、地名与情节。"
     "characters/locations/factions/props 为对象数组，每项含 name、aliases[]、evidence(原文摘录)。"
-    "events 为对象数组，每项至少含 summary 与 evidence。"
+    "events 为对象数组，每项至少含 summary 与 evidence，且必须来自当前正文。"
     "foreshadowing 为对象数组，每项至少含 note 与 evidence。"
     "visual_candidates 为对象数组，含 scene、evidence、visual_score。"
     "visual_cues/voice_cues/adaptation_notes 为 string 数组。"
 )
 
 EXAMPLE = (
-    '{"summary":"林砚之抵达青川渡",'
-    '"characters":[{"name":"林砚之","aliases":["少年"],"evidence":"林砚之立于渡口"}],'
-    '"locations":[{"name":"青川渡","aliases":[],"evidence":"青川渡晨雾"}],'
-    '"factions":[],"props":[{"name":"玉佩","aliases":[],"evidence":"腰间玉佩"}],'
-    '"events":[{"summary":"林砚之抵达青川渡寻找陈守义","evidence":"他询问陈守义下落"}],'
-    '"foreshadowing":[{"note":"未写完的家信","evidence":"家信墨迹未干"}],'
+    '{"summary":"本段发生的一件关键事",'
+    '"characters":[{"name":"角色甲","aliases":["别称"],"evidence":"原文中出现角色甲的短句"}],'
+    '"locations":[{"name":"地点甲","aliases":[],"evidence":"原文中出现地点甲的短句"}],'
+    '"factions":[],"props":[{"name":"物件甲","aliases":[],"evidence":"原文中出现物件甲的短句"}],'
+    '"events":[{"summary":"角色甲在地点甲完成某动作","evidence":"支撑该事件的原文短句"}],'
+    '"foreshadowing":[{"note":"后文可能回收的伏笔","evidence":"伏笔相关原文短句"}],'
     '"relationships":[],'
-    '"visual_cues":["江雾笼罩的青石渡口"],'
-    '"visual_candidates":[{"scene":"江雾中的青石渡口","evidence":"江雾笼罩","visual_score":0.9}],'
-    '"voice_cues":["低沉船夫嗓音"],'
-    '"adaptation_notes":["开场用长镜头建立氛围"]}'
+    '"visual_cues":["可视觉化的环境描写"],'
+    '"visual_candidates":[{"scene":"一段可拍电影的画面","evidence":"画面依据原文","visual_score":0.9}],'
+    '"voice_cues":["可听到的声音线索"],'
+    '"adaptation_notes":["改编提示一条"]}'
+)
+
+LEAKED_EXAMPLE_SUMMARIES = frozenset(
+    {
+        "林砚之抵达青川渡寻找陈守义",
+        "林砚之抵达青川渡",
+    }
 )
 
 
@@ -62,12 +73,51 @@ def extract_chunk(
             coerced = coerce_extract(raw)
             if attempt > 0:
                 coerced["quality"]["json_repaired"] = True
+            chunk_text = str(chunk.get("text") or "")
+            cleaned_events = []
+            for ev in coerced.get("events") or []:
+                if not isinstance(ev, dict):
+                    continue
+                summary = str(ev.get("summary") or "").strip()
+                if (
+                    summary in LEAKED_EXAMPLE_SUMMARIES
+                    and "林砚之" not in chunk_text
+                    and "青川渡" not in chunk_text
+                ):
+                    continue
+                cleaned_events.append(ev)
+            coerced["events"] = cleaned_events
             return ChunkExtract.model_validate(coerced).model_dump()
         except JobCancelled:
             raise
-        except Exception as e:  # noqa: BLE001 — 校验/JSON 统一重试
+        except Exception as e:  # noqa: BLE001
             last_err = e
     raise ValueError(f"extract_failed:{chunk['id']}:{last_err}")
+
+
+def _process_one(
+    chunk: dict,
+    paths: ProjectPaths,
+    llm: LlmClient,
+    max_retries: int,
+) -> tuple[str, dict | None, dict | None, str | None]:
+    """Return (status, low_quality|None, error|None, err_msg|None). status: ok|skip|err"""
+    dest = paths.extract_chunk_json(chunk["chapter_id"], chunk["id"])
+    if dest.exists():
+        return "skip", None, None, None
+    data = extract_chunk(chunk, llm, max_retries=max_retries)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    quality = data.get("quality") or {}
+    low = None
+    if quality.get("missing_evidence_count", 0) > 0:
+        low = {
+            "chunk_id": chunk.get("chunk_id") or chunk["id"],
+            "chapter_id": chunk["chapter_id"],
+            "missing_evidence_count": quality.get("missing_evidence_count"),
+            "warnings": quality.get("warnings") or [],
+        }
+    return "ok", low, None, None
 
 
 def run_extract(
@@ -78,6 +128,8 @@ def run_extract(
     *,
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    workers: int = 4,
+    progress_every: int = 10,
 ) -> dict:
     chunks = [
         json.loads(line)
@@ -90,43 +142,51 @@ def run_extract(
     low_quality: list[dict] = []
     done = 0
     succeeded = 0
+    lock = threading.Lock()
+    last_report = 0.0
+    workers = max(1, int(workers or 1))
+    progress_every = max(1, int(progress_every or 1))
 
-    def _report() -> None:
-        if on_progress is not None:
+    def _maybe_report(force: bool = False) -> None:
+        nonlocal last_report
+        if on_progress is None:
+            return
+        now = time.monotonic()
+        if (
+            force
+            or done == total
+            or done % progress_every == 0
+            or total <= progress_every
+            or (now - last_report) >= 5.0
+        ):
             on_progress(done, total)
+            last_report = now
 
-    _report()
+    with lock:
+        if on_progress is not None:
+            on_progress(0, total)
+            last_report = time.monotonic()
+
+    pending = []
     for chunk in chunks:
-        if should_cancel and should_cancel():
-            raise JobCancelled("extract")
         dest = paths.extract_chunk_json(chunk["chapter_id"], chunk["id"])
         if dest.exists():
-            done += 1
-            succeeded += 1
-            _report()
-            continue
+            with lock:
+                done += 1
+                succeeded += 1
+                _maybe_report()
+        else:
+            pending.append(chunk)
+
+    if should_cancel and should_cancel():
+        raise JobCancelled("extract")
+
+    def _work(chunk: dict) -> tuple[dict, str, dict | None, dict | None, str | None]:
+        if should_cancel and should_cancel():
+            raise JobCancelled("extract")
         try:
-            data = extract_chunk(
-                chunk,
-                llm,
-                max_retries=max_retries,
-                should_cancel=should_cancel,
-            )
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            quality = data.get("quality") or {}
-            if quality.get("missing_evidence_count", 0) > 0:
-                low_quality.append(
-                    {
-                        "chunk_id": chunk.get("chunk_id") or chunk["id"],
-                        "chapter_id": chunk["chapter_id"],
-                        "missing_evidence_count": quality.get("missing_evidence_count"),
-                        "warnings": quality.get("warnings") or [],
-                    }
-                )
-            done += 1
-            succeeded += 1
-            _report()
+            status, low, err, msg = _process_one(chunk, paths, llm, max_retries)
+            return chunk, status, low, err, msg
         except JobCancelled:
             raise
         except Exception as e:  # noqa: BLE001
@@ -138,12 +198,35 @@ def run_extract(
                 "retry_count": max_retries + 1,
                 "skipped": bool(skip_bad),
             }
-            errors.append(err)
-            error_msgs.append(str(e))
-            if not skip_bad:
-                raise
-            done += 1
-            _report()
+            return chunk, "err", None, err, str(e)
+
+    if pending:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_work, c) for c in pending]
+            for fut in as_completed(futures):
+                try:
+                    _chunk, status, low, err, msg = fut.result()
+                except JobCancelled:
+                    for f in futures:
+                        f.cancel()
+                    raise
+                with lock:
+                    if status == "ok":
+                        succeeded += 1
+                        if low:
+                            low_quality.append(low)
+                    elif status == "err":
+                        if err:
+                            errors.append(err)
+                        if msg:
+                            error_msgs.append(msg)
+                        if not skip_bad:
+                            raise RuntimeError(msg or "extract_failed")
+                    done += 1
+                    _maybe_report()
+
+    with lock:
+        _maybe_report(force=True)
 
     report = {
         "chunk_count": total,
@@ -151,6 +234,7 @@ def run_extract(
         "failed": len(errors),
         "low_quality_count": len(low_quality),
         "skip_bad_chunks": skip_bad,
+        "workers": workers,
     }
     paths.extract_dir.mkdir(parents=True, exist_ok=True)
     paths.extract_report_json.write_text(

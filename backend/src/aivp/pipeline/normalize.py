@@ -73,35 +73,40 @@ def _merge_group(items: list[dict], entity_type: str) -> tuple[list[dict], list[
         if evidence and not entry.get("evidence"):
             entry["evidence"] = evidence
 
-    # Fuzzy uncertain pairs among remaining distinct entities.
+    # Fuzzy uncertain pairs — bucket by first char + length band to avoid O(n^2) on huge sets.
     names = list(by_key.keys())
+    buckets: dict[tuple[str, int], list[str]] = {}
+    for name in names:
+        key = (name[:1] if name else "", len(name) // 2)
+        buckets.setdefault(key, []).append(name)
     seen_pairs: set[tuple[str, str]] = set()
-    for i, left in enumerate(names):
-        for right in names[i + 1 :]:
-            score = _similar(left, right)
-            if score < 0.72 or score >= 0.98:
-                continue
-            key = tuple(sorted((left, right)))
-            if key in seen_pairs:
-                continue
-            seen_pairs.add(key)
-            uncertain.append(
-                {
-                    "left": left,
-                    "right": right,
-                    "type": entity_type,
-                    "score": round(score, 3),
-                    "reason": "string_similarity",
-                    "recommendation": "merge" if score >= 0.85 else "review",
-                    "review_status": "pending",
-                    "left_id": by_key[left]["id"],
-                    "right_id": by_key[right]["id"],
-                }
-            )
-            by_key[left]["confidence"] = min(by_key[left]["confidence"], 0.7)
-            by_key[right]["confidence"] = min(by_key[right]["confidence"], 0.7)
-            by_key[left]["review_status"] = "needs_review"
-            by_key[right]["review_status"] = "needs_review"
+    for group in buckets.values():
+        for i, left in enumerate(group):
+            for right in group[i + 1 :]:
+                score = _similar(left, right)
+                if score < 0.72 or score >= 0.98:
+                    continue
+                pair = tuple(sorted((left, right)))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                uncertain.append(
+                    {
+                        "left": left,
+                        "right": right,
+                        "type": entity_type,
+                        "score": round(score, 3),
+                        "reason": "string_similarity_bucketed",
+                        "recommendation": "merge" if score >= 0.85 else "review",
+                        "review_status": "pending",
+                        "left_id": by_key[left]["id"],
+                        "right_id": by_key[right]["id"],
+                    }
+                )
+                by_key[left]["confidence"] = min(by_key[left]["confidence"], 0.7)
+                by_key[right]["confidence"] = min(by_key[right]["confidence"], 0.7)
+                by_key[left]["review_status"] = "needs_review"
+                by_key[right]["review_status"] = "needs_review"
 
     return list(by_key.values()), uncertain
 
@@ -162,6 +167,64 @@ def run_normalize(extract_dir: Path, out_json: Path) -> dict:
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return entities
+
+
+def normalize_extracts_for_chapters(
+    extract_dir: Path,
+    chapter_ids: set[str],
+) -> list[dict]:
+    extracts: list[dict] = []
+    for path in sorted(extract_dir.glob("*/*.json")):
+        if path.parent.name not in chapter_ids:
+            continue
+        if path.name in {"extract_report.json", "errors.json", "low_quality_chunks.json"}:
+            continue
+        extracts.append(json.loads(path.read_text(encoding="utf-8")))
+    return extracts
+
+
+def run_normalize_volume(
+    extract_dir: Path,
+    out_json: Path,
+    chapter_ids: list[str],
+) -> dict:
+    extracts = normalize_extracts_for_chapters(extract_dir, set(chapter_ids))
+    result = normalize_entities(extracts)
+    entities = result["entities"]
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(entities, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_json.parent / "uncertain_entities.json").write_text(
+        json.dumps(result["uncertain_entities"], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return entities
+
+
+def merge_volume_entities(volume_entity_maps: list[dict]) -> dict:
+    """Merge per-volume entities.json dicts into a global entities map."""
+    buckets: dict[str, list] = {
+        "characters": [],
+        "locations": [],
+        "factions": [],
+        "props": [],
+    }
+    for entities in volume_entity_maps:
+        for k in buckets:
+            for item in entities.get(k) or []:
+                if isinstance(item, dict) and item.get("name"):
+                    # Flatten to seed form for re-merge
+                    buckets[k].append(
+                        {
+                            "name": item.get("canonical_name") or item.get("name"),
+                            "aliases": list(item.get("aliases") or []),
+                            "evidence": item.get("evidence") or "",
+                            "sources": list(item.get("sources") or []),
+                        }
+                    )
+    # Re-run alias+bucket merge across volumes
+    flat_extracts = [{k: buckets[k] for k in buckets}]
+    # normalize_entities expects list of extract-shaped dicts
+    return normalize_entities(flat_extracts)
 
 
 def apply_entity_merge(

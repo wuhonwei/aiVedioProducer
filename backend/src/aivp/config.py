@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     chunk_overlap: int = 500
     extract_max_retries: int = 2
     skip_bad_chunks: bool = True
+    extract_workers: int = 4
+    extract_progress_every: int = 10
+    volume_max_chars: int = 80_000
+    volume_max_chapters: int = 40
+    timeline_page_size: int = 50
+    api_page_size: int = 50
+    enrich_event_window: int = 40
     enrich_top_characters: int = 8
     enrich_top_locations: int = 8
     enrich_top_props: int = 6

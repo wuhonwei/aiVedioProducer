@@ -60,12 +60,27 @@ export function ShotsPage({ projectId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftPrompt, setDraftPrompt] = useState("");
+  const [shots, setShots] = useState<Shot[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const pageSize = 50;
 
   const reload = async () => {
     setError(null);
     try {
-      const data = await getShots(projectId);
-      setDoc(data);
+      const data = await getShots(projectId, { offset: 0, limit: pageSize });
+      const list = (data.items || data.shots || []) as Shot[];
+      setShots(list);
+      setTotalCount(data.total_count ?? data.shot_count ?? list.length);
+      setHasMore(Boolean(data.has_more));
+      setDoc({
+        shots: list,
+        shot_count: data.total_count ?? data.shot_count,
+        model: data.model,
+        warnings: data.warnings,
+        schema_version: data.schema_version,
+      });
       try {
         setPlan(await getAssetPlan(projectId));
       } catch {
@@ -73,7 +88,32 @@ export function ShotsPage({ projectId }: Props) {
       }
     } catch (e) {
       setDoc(null);
+      setShots([]);
       setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const data = await getShots(projectId, { offset: shots.length, limit: pageSize });
+      const list = (data.items || data.shots || []) as Shot[];
+      setShots((prev) => [...prev, ...list]);
+      setTotalCount(data.total_count ?? data.shot_count ?? shots.length + list.length);
+      setHasMore(Boolean(data.has_more));
+      setDoc((prev) =>
+        prev
+          ? {
+              ...prev,
+              shots: [...(prev.shots || []), ...list],
+              shot_count: data.total_count ?? data.shot_count,
+            }
+          : prev,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -83,16 +123,16 @@ export function ShotsPage({ projectId }: Props) {
 
   const groups = useMemo(() => {
     const map = new Map<string, Shot[]>();
-    for (const shot of doc?.shots || []) {
+    for (const shot of shots) {
       const key = shot.event_id || "unknown";
       const list = map.get(key) || [];
       list.push(shot);
       map.set(key, list);
     }
     return [...map.entries()];
-  }, [doc]);
+  }, [shots]);
 
-  const selected = (doc?.shots || []).find((s) => s.shot_id === selectedId) || null;
+  const selected = shots.find((s) => s.shot_id === selectedId) || null;
 
   useEffect(() => {
     setDraftPrompt(selected?.visual_prompt || "");
@@ -149,8 +189,8 @@ export function ShotsPage({ projectId }: Props) {
       {doc && (
         <div className="row">
           <span className="note">
-            {doc.shot_count ?? doc.shots?.length ?? 0} 镜 · schema {doc.schema_version ?? "—"} · 模型{" "}
-            {doc.model || "—"}
+            已加载 {shots.length} / {totalCount || doc.shot_count || 0} 镜 · schema{" "}
+            {doc.schema_version ?? "—"} · 模型 {doc.model || "—"}
           </span>
           <button type="button" className="btn btn-secondary" onClick={download}>
             导出 JSON
@@ -298,6 +338,18 @@ export function ShotsPage({ projectId }: Props) {
           </section>
         ))}
       </div>
+      {hasMore && (
+        <div className="row" style={{ marginTop: 12 }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={loadingMore}
+            onClick={() => void loadMore()}
+          >
+            {loadingMore ? "加载中…" : "加载更多分镜"}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

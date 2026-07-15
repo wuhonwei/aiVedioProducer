@@ -24,6 +24,8 @@ class Job(Base):
     current_step: Mapped[str | None] = mapped_column(String(64), nullable=True)
     chunks_total: Mapped[int] = mapped_column(Integer, default=0)
     chunks_done: Mapped[int] = mapped_column(Integer, default=0)
+    volumes_total: Mapped[int] = mapped_column(Integer, default=0)
+    volumes_done: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     resume_from_step: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

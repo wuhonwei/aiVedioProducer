@@ -59,6 +59,7 @@ def _persist(paths: ProjectPaths) -> tuple[dict[str, Any], dict[str, Any]]:
 @router.get("/projects/{project_id}/bible")
 def get_bible(
     project_id: str,
+    sections: str | None = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
@@ -69,7 +70,48 @@ def get_bible(
     if not auto and not overlay:
         raise HTTPException(status_code=404, detail="Story bible not available yet")
     merged, _meta = _persist(paths)
+    if sections:
+        keys = [k.strip() for k in sections.split(",") if k.strip()]
+        return {k: merged.get(k) for k in keys if k in merged or k in REQUIRED_BIBLE_KEYS}
+    # Avoid shipping full timeline when only preview is stored; keep timeline_ref.
     return merged
+
+
+@router.get("/projects/{project_id}/timeline")
+def get_timeline(
+    project_id: str,
+    offset: int = 0,
+    limit: int | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    paths = ProjectPaths(settings.data_root, project_id)
+    page_size = limit if limit is not None else settings.api_page_size
+    page_size = max(1, min(int(page_size), 500))
+    offset = max(0, int(offset))
+
+    events: list[dict[str, Any]] = []
+    if paths.events_json.exists():
+        events = json.loads(paths.events_json.read_text(encoding="utf-8"))
+    elif paths.timeline_index_json.exists() and paths.timeline_pages_dir.exists():
+        index = json.loads(paths.timeline_index_json.read_text(encoding="utf-8"))
+        for page_meta in index.get("pages") or []:
+            page_path = paths.timeline_pages_dir / page_meta["path"]
+            if page_path.exists():
+                events.extend(json.loads(page_path.read_text(encoding="utf-8")))
+    else:
+        raise HTTPException(status_code=404, detail="Timeline not available yet")
+
+    total = len(events)
+    slice_ = events[offset : offset + page_size]
+    return {
+        "items": slice_,
+        "offset": offset,
+        "limit": page_size,
+        "total_count": total,
+        "has_more": offset + len(slice_) < total,
+    }
 
 
 @router.get("/projects/{project_id}/bible/meta")

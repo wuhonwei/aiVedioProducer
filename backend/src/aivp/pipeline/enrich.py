@@ -161,30 +161,36 @@ def enrich_event_list(
     llm,
     *,
     should_cancel: Callable[[], bool] | None = None,
+    window: int = 40,
 ) -> list[dict]:
     if not events:
         return []
-    payload = {"events": events[:80], "characters": character_names[:40]}
+    window = max(1, int(window or 40))
     llm_map: dict[str, dict] = {}
     if llm is not None:
-        try:
-            raw = llm.complete_json(
-                EVENT_SYSTEM,
-                "Enrich these events for video beats:\n"
-                + json.dumps(payload, ensure_ascii=False)[:12000],
-                should_cancel=should_cancel,
-            )
-            items = raw.get("events") if isinstance(raw, dict) else None
-            if isinstance(items, list):
-                for item in items:
-                    if isinstance(item, dict):
-                        key = str(item.get("id") or item.get("summary") or "")
-                        if key:
-                            llm_map[key] = item
-        except JobCancelled:
-            raise
-        except Exception:
-            llm_map = {}
+        for start in range(0, len(events), window):
+            if should_cancel and should_cancel():
+                raise JobCancelled("enrich_events")
+            batch = events[start : start + window]
+            payload = {"events": batch, "characters": character_names[:40]}
+            try:
+                raw = llm.complete_json(
+                    EVENT_SYSTEM,
+                    "Enrich these events for video beats:\n"
+                    + json.dumps(payload, ensure_ascii=False)[:12000],
+                    should_cancel=should_cancel,
+                )
+                items = raw.get("events") if isinstance(raw, dict) else None
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict):
+                            key = str(item.get("id") or item.get("summary") or "")
+                            if key:
+                                llm_map[key] = item
+            except JobCancelled:
+                raise
+            except Exception:
+                continue
 
     out: list[dict] = []
     for ev in events:
@@ -264,7 +270,11 @@ def run_enrich(
     char_names = [str(c.get("name")) for c in assets.get("characters") or [] if c.get("name")]
     try:
         events = enrich_event_list(
-            draft_events, char_names, llm, should_cancel=should_cancel
+            draft_events,
+            char_names,
+            llm,
+            should_cancel=should_cancel,
+            window=getattr(settings, "enrich_event_window", 40),
         )
     except JobCancelled:
         raise

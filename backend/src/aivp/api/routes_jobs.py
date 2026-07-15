@@ -21,6 +21,9 @@ class JobCreate(BaseModel):
     resume_from_step: str | None = None
     force_enrich: bool = False
     force_shots: bool = False
+    volume_id: str | None = None
+    chapter_from: str | None = None
+    chapter_to: str | None = None
 
 
 def _short_id() -> str:
@@ -40,6 +43,9 @@ def _job_out(
     *,
     force_enrich: bool | None = None,
     force_shots: bool | None = None,
+    volume_id: str | None = None,
+    chapter_from: str | None = None,
+    chapter_to: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": job.id,
@@ -48,10 +54,15 @@ def _job_out(
         "current_step": job.current_step,
         "chunks_total": job.chunks_total,
         "chunks_done": job.chunks_done,
+        "volumes_total": getattr(job, "volumes_total", 0) or 0,
+        "volumes_done": getattr(job, "volumes_done", 0) or 0,
         "error_message": job.error_message,
         "resume_from_step": job.resume_from_step,
         "force_enrich": bool(force_enrich),
         "force_shots": bool(force_shots),
+        "volume_id": volume_id,
+        "chapter_from": chapter_from,
+        "chapter_to": chapter_to,
         "created_at": job.created_at.isoformat() if job.created_at else None,
     }
 
@@ -77,6 +88,9 @@ def _run_job_in_session(app, job_id: str) -> None:
             force_enrich=force_enrich,
             force_shots=force_shots,
             shot_llm=shot_llm,
+            volume_id=flags.get("volume_id"),
+            chapter_from=flags.get("chapter_from"),
+            chapter_to=flags.get("chapter_to"),
         )
     except Exception:
         # run_job persists step_failed; swallow so the worker thread stays quiet
@@ -142,6 +156,9 @@ def start_job(
     _job_flags(app)[job.id] = {
         "force_enrich": bool(body.force_enrich),
         "force_shots": bool(body.force_shots),
+        "volume_id": body.volume_id,
+        "chapter_from": body.chapter_from,
+        "chapter_to": body.chapter_to,
     }
     if getattr(app.state, "run_jobs_inline", False):
         _run_job_in_session(app, job.id)
@@ -162,6 +179,9 @@ def start_job(
         job,
         force_enrich=body.force_enrich,
         force_shots=body.force_shots,
+        volume_id=body.volume_id,
+        chapter_from=body.chapter_from,
+        chapter_to=body.chapter_to,
     )
 
 

@@ -51,12 +51,40 @@ def _save_doc(paths: ProjectPaths, doc: dict[str, Any]) -> dict[str, Any]:
 @router.get("/projects/{project_id}/shots")
 def get_shots(
     project_id: str,
+    offset: int = 0,
+    limit: int | None = None,
+    event_id: str | None = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     _require_project(db, project_id)
     paths = ProjectPaths(settings.data_root, project_id)
-    return _load_doc(paths)
+    doc = _load_doc(paths)
+    shots = list(doc.get("shots") or [])
+    if event_id:
+        shots = [s for s in shots if s.get("event_id") == event_id]
+    total = len(shots)
+    if limit is None and offset == 0 and event_id is None:
+        # Backward compatible full payload.
+        return doc
+    page_size = limit if limit is not None else settings.api_page_size
+    page_size = max(1, min(int(page_size), 500))
+    offset = max(0, int(offset))
+    slice_ = shots[offset : offset + page_size]
+    return {
+        "schema_version": doc.get("schema_version"),
+        "model": doc.get("model"),
+        "event_count": doc.get("event_count"),
+        "shot_count": total,
+        "items": slice_,
+        "shots": slice_,
+        "offset": offset,
+        "limit": page_size,
+        "total_count": total,
+        "has_more": offset + len(slice_) < total,
+        "warnings": doc.get("warnings") or [],
+        "volumes": doc.get("volumes") or [],
+    }
 
 
 @router.get("/projects/{project_id}/shots/{shot_id}")

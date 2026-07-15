@@ -278,6 +278,9 @@ export function PipelinePage({ projectId }: Props) {
           </div>
           <div>
             Chunk 进度：{job.chunks_done}/{job.chunks_total}
+            {(job.volumes_total ?? 0) > 0
+              ? ` · 卷 ${job.volumes_done ?? 0}/${job.volumes_total}`
+              : ""}
           </div>
           <div className="progress-track" aria-hidden>
             <div className="progress-fill" style={{ width: `${pct}%` }} />

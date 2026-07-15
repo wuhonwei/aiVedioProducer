@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import json
 
 from sqlalchemy.orm import Session
 
@@ -9,14 +10,45 @@ from aivp.paths import ProjectPaths
 from aivp.pipeline.arcs import run_arcs
 from aivp.pipeline.assemble import run_assemble
 from aivp.pipeline.chapters import run_chapter_split
-from aivp.pipeline.chunks import run_chunk
+from aivp.pipeline.chunks import chunk_chapters, chunk_report, run_chunk
 from aivp.pipeline.clean import run_clean
 from aivp.pipeline.enrich import run_enrich
 from aivp.pipeline.extract import run_extract
-from aivp.pipeline.normalize import run_normalize
+from aivp.pipeline.normalize import merge_volume_entities, run_normalize, run_normalize_volume
 from aivp.pipeline.shot_script import run_shot_script
 from aivp.pipeline.timeline import run_timeline
 from aivp.pipeline.types import STAGE_ALIASES, STAGE_ORDER
+from aivp.pipeline.volumes import (
+    filter_chapters_by_range,
+    filter_chapters_by_volume,
+    run_plan_volumes,
+)
+
+
+def _load_volumes(paths: ProjectPaths) -> list[dict]:
+    if not paths.volumes_json.exists():
+        return []
+    payload = json.loads(paths.volumes_json.read_text(encoding="utf-8"))
+    return list(payload.get("volumes") or [])
+
+
+def _resolve_chapters(
+    paths: ProjectPaths,
+    *,
+    volume_id: str | None = None,
+    chapter_from: str | None = None,
+    chapter_to: str | None = None,
+) -> list[dict]:
+    chapters = json.loads(paths.chapters_json.read_text(encoding="utf-8"))
+    if volume_id:
+        volumes = _load_volumes(paths)
+        vol = next((v for v in volumes if v.get("id") == volume_id), None)
+        if vol is None:
+            raise ValueError(f"volume_not_found:{volume_id}")
+        return filter_chapters_by_volume(chapters, vol)
+    return filter_chapters_by_range(
+        chapters, chapter_from=chapter_from, chapter_to=chapter_to
+    )
 
 
 def run_job(
@@ -29,6 +61,9 @@ def run_job(
     force_enrich: bool = False,
     force_shots: bool = False,
     shot_llm=None,
+    volume_id: str | None = None,
+    chapter_from: str | None = None,
+    chapter_to: str | None = None,
 ) -> None:
     job = session.get(Job, job_id)
     if not job:
@@ -47,6 +82,7 @@ def run_job(
     job.status = "running"
     session.commit()
     warnings: list[str] = []
+    range_active = bool(volume_id or chapter_from or chapter_to)
 
     def _check_cancel() -> None:
         if should_cancel and should_cancel():
@@ -62,13 +98,54 @@ def run_job(
                 run_clean(paths.source_txt, paths.clean_txt)
             elif step == "02_chapters":
                 run_chapter_split(paths.clean_txt, paths.chapters_json)
-            elif step == "03_chunks":
-                chunks = run_chunk(
+                volumes = run_plan_volumes(
                     paths.chapters_json,
-                    paths.chunks_jsonl,
-                    settings.chunk_size,
-                    settings.chunk_overlap,
+                    paths.volumes_json,
+                    max_chars=settings.volume_max_chars,
+                    max_chapters=settings.volume_max_chapters,
                 )
+                job.volumes_total = len(volumes)
+                job.volumes_done = 0
+                session.commit()
+            elif step == "03_chunks":
+                if not paths.volumes_json.exists() and paths.chapters_json.exists():
+                    volumes = run_plan_volumes(
+                        paths.chapters_json,
+                        paths.volumes_json,
+                        max_chars=settings.volume_max_chars,
+                        max_chapters=settings.volume_max_chapters,
+                    )
+                    job.volumes_total = len(volumes)
+                    session.commit()
+                if range_active:
+                    chapters = _resolve_chapters(
+                        paths,
+                        volume_id=volume_id,
+                        chapter_from=chapter_from,
+                        chapter_to=chapter_to,
+                    )
+                    chunks = chunk_chapters(
+                        chapters, size=settings.chunk_size, overlap=settings.chunk_overlap
+                    )
+                    paths.chunks_jsonl.parent.mkdir(parents=True, exist_ok=True)
+                    with paths.chunks_jsonl.open("w", encoding="utf-8") as f:
+                        for c in chunks:
+                            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+                    paths.chunk_report_json.write_text(
+                        json.dumps(
+                            chunk_report(chunks, settings.chunk_size, settings.chunk_overlap),
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                else:
+                    chunks = run_chunk(
+                        paths.chapters_json,
+                        paths.chunks_jsonl,
+                        settings.chunk_size,
+                        settings.chunk_overlap,
+                    )
                 job.chunks_total = len(chunks)
                 job.chunks_done = 0
                 session.commit()
@@ -93,13 +170,78 @@ def run_job(
                     settings.skip_bad_chunks,
                     should_cancel=should_cancel,
                     on_progress=_on_extract_progress,
+                    workers=settings.extract_workers,
+                    progress_every=settings.extract_progress_every,
                 )
                 job.chunks_done = result["done"]
                 job.chunks_total = result["total"]
                 warnings.extend(result.get("errors", []))
                 session.commit()
             elif step == "05_normalize":
-                run_normalize(paths.extract_dir, paths.entities_json)
+                volumes = _load_volumes(paths)
+                if volume_id:
+                    volumes = [v for v in volumes if v.get("id") == volume_id]
+                if volumes:
+                    job.volumes_total = len(volumes)
+                    job.volumes_done = 0
+                    session.commit()
+                    volume_maps: list[dict] = []
+                    uncertain_all: list[dict] = []
+                    for i, vol in enumerate(volumes, start=1):
+                        _check_cancel()
+                        out = paths.volume_entities_json(vol["id"])
+                        run_normalize_volume(
+                            paths.extract_dir,
+                            out,
+                            list(vol.get("chapter_ids") or []),
+                        )
+                        volume_maps.append(
+                            json.loads(out.read_text(encoding="utf-8"))
+                        )
+                        unc_path = paths.volume_uncertain_json(vol["id"])
+                        if unc_path.exists():
+                            uncertain_all.extend(
+                                json.loads(unc_path.read_text(encoding="utf-8"))
+                            )
+                        job.volumes_done = i
+                        session.commit()
+                    merged = merge_volume_entities(volume_maps)
+                    entities = merged["entities"]
+                    paths.entities_json.parent.mkdir(parents=True, exist_ok=True)
+                    paths.entities_json.write_text(
+                        json.dumps(entities, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    paths.uncertain_entities_json.write_text(
+                        json.dumps(
+                            merged.get("uncertain_entities") or uncertain_all,
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    paths.candidate_pairs_json.write_text(
+                        json.dumps(
+                            merged.get("candidate_pairs")
+                            or merged.get("uncertain_entities")
+                            or [],
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    report = {
+                        "entity_counts": {k: len(v) for k, v in entities.items()},
+                        "uncertain_count": len(merged.get("uncertain_entities") or []),
+                        "volume_count": len(volumes),
+                        "auto_merged": True,
+                    }
+                    paths.normalize_report_json.write_text(
+                        json.dumps(report, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                else:
+                    run_normalize(paths.extract_dir, paths.entities_json)
             elif step == "06_enrich_assets":
 
                 def _on_enrich_progress(done: int, total: int) -> None:
@@ -123,6 +265,9 @@ def run_job(
                     paths.extract_dir,
                     paths.events_json,
                     enriched_json=paths.events_enriched_json,
+                    page_size=settings.timeline_page_size,
+                    pages_dir=paths.timeline_pages_dir,
+                    index_json=paths.timeline_index_json,
                 )
             elif step == "08_arcs":
                 run_arcs(paths.chapters_json, paths.events_json, paths.arcs_json)
@@ -133,6 +278,7 @@ def run_job(
                     warnings=warnings,
                     llm=llm,
                     should_cancel=should_cancel,
+                    timeline_page_size=settings.timeline_page_size,
                 )
             elif step == "10_shot_script":
 
@@ -151,6 +297,9 @@ def run_job(
                     should_cancel=should_cancel,
                     on_progress=_on_shot_progress,
                     force=bool(force_shots or settings.shot_force),
+                    volume_id=volume_id,
+                    chapter_from=chapter_from,
+                    chapter_to=chapter_to,
                 )
                 warnings.extend(result.get("warnings") or [])
                 if result.get("skipped"):

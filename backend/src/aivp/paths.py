@@ -14,6 +14,8 @@ class ProjectPaths:
         self.clean_report_json = self.stages_dir / "01_clean" / "clean_report.json"
         self.chapters_json = self.stages_dir / "02_chapters" / "chapters.json"
         self.chapter_report_json = self.stages_dir / "02_chapters" / "chapter_report.json"
+        self.volumes_dir = self.stages_dir / "00_volumes"
+        self.volumes_json = self.volumes_dir / "volumes.json"
         self.chunks_jsonl = self.stages_dir / "03_chunks" / "chunks.jsonl"
         self.chunk_report_json = self.stages_dir / "03_chunks" / "chunk_report.json"
         self.extract_dir = self.stages_dir / "04_extract"
@@ -26,6 +28,7 @@ class ProjectPaths:
         self.normalize_report_json = self.normalize_dir / "normalize_report.json"
         self.merged_bible_json = self.stages_dir / "09_bible" / "story_bible.merged.json"
         self.bible_meta_json = self.stages_dir / "09_bible" / "story_bible.meta.json"
+        self.volume_synopses_json = self.stages_dir / "09_bible" / "volume_synopses.json"
         self.asset_plan_json = self.root / "assets" / "asset_plan.json"
         self.shots_dir = self.root / "shots"
         self.enrich_dir = self.stages_dir / "06_enrich_assets"
@@ -33,10 +36,14 @@ class ProjectPaths:
         self.assets_json = self.enrich_dir / "assets.json"
         self.events_enriched_json = self.enrich_dir / "events_enriched.json"
         self.events_json = self.stages_dir / "07_timeline" / "events.json"
+        self.timeline_dir = self.stages_dir / "07_timeline"
+        self.timeline_pages_dir = self.timeline_dir / "pages"
+        self.timeline_index_json = self.timeline_dir / "timeline_index.json"
         self.arcs_json = self.stages_dir / "08_arcs" / "arcs.json"
         self.auto_bible_json = self.stages_dir / "09_bible" / "story_bible.auto.json"
         self.shot_script_dir = self.stages_dir / "10_shot_script"
         self.shot_script_json = self.shot_script_dir / "shot_script.json"
+        self.shot_script_index_json = self.shot_script_dir / "shot_script.index.json"
         self.overlay_json = self.overlays_dir / "story_bible.overlay.json"
 
     def ensure(self) -> None:
@@ -44,11 +51,13 @@ class ProjectPaths:
             self.raw_dir,
             self.stages_dir / "01_clean",
             self.stages_dir / "02_chapters",
+            self.volumes_dir,
             self.stages_dir / "03_chunks",
             self.extract_dir,
             self.stages_dir / "05_normalize",
             self.enrich_dir,
-            self.stages_dir / "07_timeline",
+            self.timeline_dir,
+            self.timeline_pages_dir,
             self.stages_dir / "08_arcs",
             self.stages_dir / "09_bible",
             self.shot_script_dir,
@@ -61,3 +70,18 @@ class ProjectPaths:
 
     def extract_chunk_json(self, chapter_id: str, chunk_id: str) -> Path:
         return self.extract_dir / chapter_id / f"{chunk_id}.json"
+
+    def volume_dir(self, volume_id: str) -> Path:
+        return self.volumes_dir / volume_id
+
+    def volume_entities_json(self, volume_id: str) -> Path:
+        return self.volume_dir(volume_id) / "entities.json"
+
+    def volume_uncertain_json(self, volume_id: str) -> Path:
+        return self.volume_dir(volume_id) / "uncertain_entities.json"
+
+    def shot_script_volume_json(self, volume_id: str) -> Path:
+        return self.shot_script_dir / f"shot_script.{volume_id}.json"
+
+    def timeline_page_json(self, page: int) -> Path:
+        return self.timeline_pages_dir / f"p{page:04d}.json"

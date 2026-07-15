@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -27,11 +27,27 @@ def _error_body(code: str, message: str, details=None) -> dict:
     return body
 
 
+def _ensure_job_columns(engine) -> None:
+    """Add volumes_* columns on existing SQLite DBs created before Plan A."""
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(jobs)")).fetchall()
+        cols = {r[1] for r in rows}
+        if "volumes_total" not in cols:
+            conn.execute(
+                text("ALTER TABLE jobs ADD COLUMN volumes_total INTEGER DEFAULT 0")
+            )
+        if "volumes_done" not in cols:
+            conn.execute(
+                text("ALTER TABLE jobs ADD COLUMN volumes_done INTEGER DEFAULT 0")
+            )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.data_root.mkdir(parents=True, exist_ok=True)
     engine = create_engine(settings.db_url, connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
+    _ensure_job_columns(engine)
     SessionLocal = sessionmaker(bind=engine)
 
     app = FastAPI(title="AIVP Text Layer")

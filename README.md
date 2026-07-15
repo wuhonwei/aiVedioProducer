@@ -110,5 +110,38 @@ make test   # 两者
 
 ## 相关文档
 
+- [百万字单机支持设计](docs/superpowers/specs/2026-07-16-million-char-support-design.md)
 - [全链路优化规格](docs/superpowers/specs/2026-07-15-full-pipeline-optimization.md)
 - [Phase 0～3 实施计划](docs/superpowers/plans/2026-07-15-phase0-3-optimization.md)
+
+## 百万字小说指南（单机）
+
+长篇（约 80 万～100 万+ 汉字）建议过夜跑；保持单进程 FastAPI，**不**依赖 Redis/Celery。
+
+### 推荐环境变量
+
+| 变量 | 建议 | 说明 |
+|------|------|------|
+| `AIVP_EXTRACT_WORKERS` | `4` | 抽取线程池并发 |
+| `AIVP_EXTRACT_PROGRESS_EVERY` | `10` | 每 N 个 chunk 提交一次进度（防 SQLite 写放大） |
+| `AIVP_CHUNK_SIZE` | `6000` | 比默认 4000 更大可减少 chunk 数与 LLM 调用 |
+| `AIVP_CHUNK_OVERLAP` | `500` | 与 chunk_size 匹配即可 |
+| `AIVP_VOLUME_MAX_CHARS` | `80000` | 分卷字数上限 |
+| `AIVP_VOLUME_MAX_CHAPTERS` | `40` | 分卷章数上限 |
+| `AIVP_ENRICH_EVENT_WINDOW` | `40` | 事件 enrich 滑窗，避免只取前 80 条 |
+| `AIVP_TIMELINE_PAGE_SIZE` / `AIVP_API_PAGE_SIZE` | `50` | 时间线/分镜分页 |
+
+### 过夜跑与续跑
+
+1. 上传全书 TXT → 启动任务。关闭浏览器**不会**停后台 job。
+2. 失败或手动终止后，可用 `resume_from_step`（如 `04_extract`）续跑；extract 已落盘的 chunk 会跳过。
+3. 卷进度在流水线页显示为 `卷 done/total`；chunk 进度仍为 `chunks_done/total`。
+4. Bible 时间线、分镜页支持「加载更多」，完整事件保存在 `07_timeline/events.json` 与分页文件。
+
+### 假数据验收
+
+```bash
+cd backend && python -m pytest tests/test_million_char_support.py -v
+# 或加长文端到端（Fake LLM）
+python ../scripts/verify_million_char_fake.py
+```
