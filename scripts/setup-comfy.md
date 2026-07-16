@@ -11,6 +11,19 @@ New-Item -ItemType Directory -Force -Path tools | Out-Null
 git clone https://github.com/comfyanonymous/ComfyUI.git tools\ComfyUI
 ```
 
+
+## PyAV stub (Smart App Control / image-only)
+
+Windows **Smart App Control** may block the real PyAV wheel (unsigned `.pyd`). For **image-only** Comfy on port 8190, use a pure-Python stub instead of `pip install av`:
+
+```powershell
+# from repo root, after venv + requirements
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\patch-comfy-av-stub.ps1
+```
+
+Re-run after recreating `tools\ComfyUI\.venv`. Video/audio nodes that need FFmpeg will not work with the stub.
+
+
 ## 2. Python deps
 
 Prefer a venv inside the Comfy tree:
