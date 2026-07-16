@@ -11,9 +11,9 @@ from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile
 from aivp.visual.prompts import (
     EXPRESSION_SLOTS,
-    SHEET_NEGATIVE,
     TURNAROUND_SLOTS,
     build_character_prompt,
+    sheet_negative_for,
 )
 
 
@@ -56,7 +56,7 @@ def generate_character_sheets(
         dest = out_dir / f"sheet_{key}.png"
         backend.generate(
             prompt=prompt,
-            negative=SHEET_NEGATIVE,
+            negative=sheet_negative_for(str(profile.get("gender_presentation") or "")),
             dest=dest,
             seed=2000 + i,
             width=768,

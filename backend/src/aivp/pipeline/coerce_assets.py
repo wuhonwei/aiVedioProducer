@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aivp.pipeline.character_looks import seed_character_look
+from aivp.pipeline.character_looks import compose_character_prompt_zh, seed_character_look
 
 
 def _text(value: Any) -> str:
@@ -34,48 +34,80 @@ def ensure_character_card(entity: dict, raw: dict | None, *, tier: str) -> dict[
     seed_app = (seed or {}).get("appearance") or {}
     seed_ward = (seed or {}).get("wardrobe") or {}
 
-    face = _text(appearance.get("face")) or (
-        _text(seed_app.get("face")) if seed else ""
-    )
-    hair = _text(appearance.get("hair")) or (
-        _text(seed_app.get("hair")) if seed else ""
-    )
-    body = _text(appearance.get("body")) or (
-        _text(seed_app.get("body")) if seed else ""
-    )
-    marks = _text(appearance.get("distinctive_marks")) or (
-        _text(seed_app.get("distinctive_marks")) if seed else ""
-    )
+    def _app(key: str) -> str:
+        return _text(appearance.get(key)) or (_text(seed_app.get(key)) if seed else "")
+
+    face_shape = _app("face_shape")
+    eyes = _app("eyes")
+    nose = _app("nose")
+    eyebrows = _app("eyebrows")
+    mouth = _app("mouth")
+    hair = _app("hair")
+    body = _app("body")
+    height = _app("height")
+    limbs = _app("limbs")
+    weight = _app("weight")
+    marks = _app("distinctive_marks")
+    face = _app("face")
+    if not face and any((face_shape, eyes, nose, eyebrows, mouth)):
+        face = "，".join(p for p in (face_shape, eyes, nose, eyebrows, mouth) if p)
+
     wardrobe_default = _text(wardrobe.get("default")) or (
         _text(seed_ward.get("default")) if seed else ""
     )
     colors = _str_list(wardrobe.get("colors")) or (
         list(seed_ward.get("colors") or []) if seed else []
     )
+    gender = _text(raw.get("gender_presentation")) or (
+        _text(seed.get("gender_presentation")) if seed else "unspecified"
+    )
+    # Majors must lock gender for t2i; unspecified → masculine (model female bias).
+    if tier == "major" and gender in {"", "unspecified"}:
+        gender = "masculine"
     timbre = _text(voice.get("timbre")) or (
         "中青年清柔女声"
-        if seed and seed.get("gender_presentation") == "feminine"
+        if gender == "feminine"
         else ("中青年清柔男声" if tier == "major" else "")
     )
     age_look = _text(raw.get("age_look")) or (
         _text(seed.get("age_look")) if seed else ""
     )
-    prompt = _text(raw.get("prompt_zh"))
-    if not prompt and seed:
-        prompt = _text(seed.get("prompt_zh"))
-    if not prompt and tier == "major" and name:
-        prompt = (
-            f"{name}，{age_look or '角色'}，{hair}，{face}，"
-            f"身着{wardrobe_default or '常服'}，国风动画角色定妆"
+    appearance_out = {
+        "face": face,
+        "face_shape": face_shape,
+        "eyes": eyes,
+        "nose": nose,
+        "eyebrows": eyebrows,
+        "mouth": mouth,
+        "hair": hair,
+        "body": body,
+        "height": height,
+        "limbs": limbs,
+        "weight": weight,
+        "distinctive_marks": marks,
+    }
+    # Always recompose majors so LLM cannot drop gender/body/face parts.
+    if tier == "major" and name:
+        prompt = compose_character_prompt_zh(
+            name=name,
+            gender_presentation=gender,
+            age_look=age_look,
+            appearance=appearance_out,
+            wardrobe_default=wardrobe_default,
         )
+    else:
+        prompt = _text(raw.get("prompt_zh")) or name
     fallback_tag = wardrobe_default or face or "配角"
     brief = _text(raw.get("brief")) or ("%s：%s" % (name, fallback_tag))
     inferred = _str_list(raw.get("inferred_fields"))
     for field, filled in [
         ("appearance.face", face and not _text((appearance or {}).get("face"))),
+        ("appearance.hair", hair and not _text((appearance or {}).get("hair"))),
+        ("appearance.body", body and not _text((appearance or {}).get("body"))),
         ("wardrobe.default", wardrobe_default and not _text((wardrobe or {}).get("default"))),
         ("voice.timbre", timbre and not _text((voice or {}).get("timbre"))),
-        ("prompt_zh", prompt and not _text(raw.get("prompt_zh"))),
+        ("prompt_zh", True),
+        ("gender_presentation", gender and not _text(raw.get("gender_presentation"))),
     ]:
         if filled and field not in inferred:
             inferred.append(field)
@@ -94,14 +126,8 @@ def ensure_character_card(entity: dict, raw: dict | None, *, tier: str) -> dict[
         "tier": tier,
         "role": _text(raw.get("role")) or ("supporting" if tier == "major" else "minor"),
         "age_look": age_look,
-        "gender_presentation": _text(raw.get("gender_presentation"))
-        or (_text(seed.get("gender_presentation")) if seed else "unspecified"),
-        "appearance": {
-            "face": face,
-            "hair": hair,
-            "body": body,
-            "distinctive_marks": marks,
-        },
+        "gender_presentation": gender,
+        "appearance": appearance_out,
         "wardrobe": {
             "default": wardrobe_default,
             "alternate": _str_list(wardrobe.get("alternate")),
@@ -118,7 +144,7 @@ def ensure_character_card(entity: dict, raw: dict | None, *, tier: str) -> dict[
         },
         "consistency_anchors": _str_list(raw.get("consistency_anchors"))
         or (
-            [wardrobe_default, hair, f"{name}面部特征"]
+            [wardrobe_default, hair, f"{name}面部特征", gender]
             if tier == "major" and wardrobe_default
             else []
         ),

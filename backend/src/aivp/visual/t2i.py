@@ -7,7 +7,7 @@ from typing import Any
 
 from aivp.visual.image_backend import ImageBackend
 from aivp.visual.paths import VisualPaths
-from aivp.visual.prompts import CHARACTER_NEGATIVE
+from aivp.visual.prompts import character_negative_for
 
 
 def _lora_basename(profile: dict, vpaths: VisualPaths, character_id: str) -> str | None:
@@ -47,7 +47,8 @@ def generate_with_character(
     lora = _lora_basename(profile, vpaths, character_id)
     backend.generate(
         prompt=full_prompt,
-        negative=negative or CHARACTER_NEGATIVE,
+        negative=negative
+        or character_negative_for(str(profile.get("gender_presentation") or "")),
         dest=dest,
         seed=42,
         width=768,

@@ -8,7 +8,7 @@ from typing import Any
 from aivp.visual.image_backend import ImageBackend
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters
-from aivp.visual.prompts import CHARACTER_NEGATIVE
+from aivp.visual.prompts import character_negative_for
 
 
 VIEW_PROMPTS = [
@@ -56,7 +56,7 @@ def generate_candidates_for_character(
     out_dir = vpaths.candidates_dir(cid)
     created: list[str] = []
     n = max(1, min(count, len(VIEW_PROMPTS)))
-    neg = negative or CHARACTER_NEGATIVE
+    neg = negative or character_negative_for(str(profile.get("gender_presentation") or ""))
     for i in range(n):
         if should_cancel and should_cancel():
             break

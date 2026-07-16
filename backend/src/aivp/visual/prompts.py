@@ -15,6 +15,27 @@ CHARACTER_NEGATIVE = (
 
 SHEET_NEGATIVE = CHARACTER_NEGATIVE + ", multiple people, crowd"
 
+
+def gender_lock_negative(gender_presentation: str | None) -> str:
+    """Extra negatives to reduce cross-gender drift on Guofeng priors."""
+    g = (gender_presentation or "").strip().lower()
+    if g in {"masculine", "male", "man", "男", "男性"}:
+        return "1girl, woman, female, girl, feminine face, breasts"
+    if g in {"feminine", "female", "woman", "女", "女性"}:
+        return "1boy, man, male, boy, masculine face, beard"
+    return ""
+
+
+def character_negative_for(gender_presentation: str | None = None) -> str:
+    extra = gender_lock_negative(gender_presentation)
+    if not extra:
+        return CHARACTER_NEGATIVE
+    return f"{CHARACTER_NEGATIVE}, {extra}"
+
+
+def sheet_negative_for(gender_presentation: str | None = None) -> str:
+    return character_negative_for(gender_presentation) + ", multiple people, crowd"
+
 TURNAROUND_SLOTS: list[tuple[str, str, str]] = [
     (
         "turnaround_front",

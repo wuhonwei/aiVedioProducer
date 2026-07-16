@@ -48,6 +48,12 @@ def ensure_profile(vpaths: VisualPaths, character: dict) -> dict[str, Any]:
     # Refresh prompt anchors from bible character card.
     profile["name"] = character.get("name") or profile.get("name")
     profile["prompt_zh"] = character.get("prompt_zh") or profile.get("prompt_zh") or ""
+    profile["gender_presentation"] = (
+        character.get("gender_presentation")
+        or profile.get("gender_presentation")
+        or "unspecified"
+    )
+    profile["age_look"] = character.get("age_look") or profile.get("age_look") or ""
     profile["appearance"] = character.get("appearance") or profile.get("appearance") or {}
     profile["wardrobe"] = character.get("wardrobe") or profile.get("wardrobe") or {}
     profile["consistency_anchors"] = (
