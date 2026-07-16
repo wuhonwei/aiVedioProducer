@@ -112,16 +112,13 @@ export function VisualPage({ projectId }: Props) {
     throw new Error("visual job timeout");
   };
 
-  const onGenerate = async () => {
+  const runVisualJob = async (start: () => Promise<{ id: string }>) => {
     setBusy(true);
     setError(null);
     try {
-      const job = await startVisualCandidates(projectId, {
-        character_ids: activeId ? [activeId] : undefined,
-        count: 8,
-      });
+      const job = await start();
       const done = await pollJob(job.id);
-      if (done.status === "failed") throw new Error(done.error || "candidates failed");
+      if (done.status === "failed") throw new Error(done.error || "visual job failed");
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -130,20 +127,55 @@ export function VisualPage({ projectId }: Props) {
     }
   };
 
-  const onSheets = async () => {
+  const onCandidatesOnce = () =>
+    void runVisualJob(() =>
+      startVisualCandidates(projectId, {
+        character_ids: activeId ? [activeId] : undefined,
+        count: 1,
+      }),
+    );
+
+  const onCandidatesBatch = () =>
+    void runVisualJob(() =>
+      startVisualCandidates(projectId, {
+        character_ids: activeId ? [activeId] : undefined,
+        count: 8,
+      }),
+    );
+
+  const onTurnaroundOnce = (slotKey: string) => {
     if (!active) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const job = await startVisualSheets(projectId, active.character_id);
-      const done = await pollJob(job.id);
-      if (done.status === "failed") throw new Error(done.error || "sheets failed");
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    void runVisualJob(() =>
+      startVisualSheets(projectId, active.character_id, { slot_keys: [slotKey] }),
+    );
+  };
+
+  const onTurnaroundBatch = () => {
+    if (!active) return;
+    void runVisualJob(() =>
+      startVisualSheets(projectId, active.character_id, { group: "turnaround" }),
+    );
+  };
+
+  const onExpressionOnce = (slotKey: string) => {
+    if (!active) return;
+    void runVisualJob(() =>
+      startVisualSheets(projectId, active.character_id, { slot_keys: [slotKey] }),
+    );
+  };
+
+  const onExpressionBatch = () => {
+    if (!active) return;
+    void runVisualJob(() =>
+      startVisualSheets(projectId, active.character_id, { group: "expression" }),
+    );
+  };
+
+  const onSheetsAll = () => {
+    if (!active) return;
+    void runVisualJob(() =>
+      startVisualSheets(projectId, active.character_id, { group: "all" }),
+    );
   };
 
   const onCurate = async () => {
@@ -324,22 +356,6 @@ export function VisualPage({ projectId }: Props) {
               <div className="row">
                 <button
                   type="button"
-                  className="btn btn-primary"
-                  disabled={busy}
-                  onClick={() => void onGenerate()}
-                >
-                  生成候选图
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={busy}
-                  onClick={() => void onSheets()}
-                >
-                  生成角色表（LoRA）
-                </button>
-                <button
-                  type="button"
                   className="btn btn-secondary"
                   disabled={busy || !(active.sheets || []).length}
                   onClick={() => selectAllSheetsForLora()}
@@ -365,6 +381,24 @@ export function VisualPage({ projectId }: Props) {
               </div>
 
               <h4 style={{ marginBottom: 0 }}>候选图</h4>
+              <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={onCandidatesOnce}
+                >
+                  单次生成候选
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={onCandidatesBatch}
+                >
+                  批量生成候选（8）
+                </button>
+              </div>
               <div className="bible-cards" aria-label="candidate-grid">
                 {active.candidates.map((name) =>
                   renderThumb(
@@ -385,9 +419,87 @@ export function VisualPage({ projectId }: Props) {
                 )}
               </div>
 
-              <h4 style={{ marginBottom: 0 }}>角色表（三视图 / 表情 · LoRA 主训练集）</h4>
+              <h4 style={{ marginBottom: 0 }}>三视图（LoRA）</h4>
+              <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={() => onTurnaroundOnce("turnaround_front")}
+                >
+                  单次·正面
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={() => onTurnaroundOnce("turnaround_side")}
+                >
+                  单次·侧面
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={() => onTurnaroundOnce("turnaround_back")}
+                >
+                  单次·背面
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={onTurnaroundBatch}
+                >
+                  批量·三视图全部
+                </button>
+              </div>
+
+              <h4 style={{ marginBottom: 0 }}>表情（LoRA）</h4>
+              <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                {(
+                  [
+                    ["expr_calm", "平静"],
+                    ["expr_smile", "微笑"],
+                    ["expr_happy", "开心"],
+                    ["expr_confused", "疑惑"],
+                    ["expr_angry", "愤怒"],
+                    ["expr_sad", "悲伤"],
+                    ["expr_surprised", "惊讶"],
+                    ["expr_shy", "害羞"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => onExpressionOnce(key)}
+                  >
+                    单次·{label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={onExpressionBatch}
+                >
+                  批量·全部表情
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={onSheetsAll}
+                >
+                  批量·三视图+表情全套
+                </button>
+              </div>
+
+              <h4 style={{ marginBottom: 0 }}>角色表预览（勾选入训）</h4>
               <p className="note">
-                含正面/侧面/背面与 8 种表情；每张旁有 caption，勾选后进入 curated 供微调。
+                单次/批量生成的图会出现在下方；勾选后点「确认训练集」写入 curated。
               </p>
               <div className="bible-cards" aria-label="sheet-grid">
                 {(active.sheets || []).map((name) =>
@@ -411,7 +523,7 @@ export function VisualPage({ projectId }: Props) {
                   ),
                 )}
                 {!active.sheets?.length && (
-                  <p className="note">尚未生成角色表，点击「生成角色表（LoRA）」。</p>
+                  <p className="note">尚未生成角色表，请用上方单次/批量按钮出图。</p>
                 )}
               </div>
 

@@ -16,6 +16,36 @@ from aivp.visual.prompts import (
     sheet_negative_for,
 )
 
+ALL_SLOTS: dict[str, tuple[str, str, str]] = {
+    key: (key, label, framing)
+    for key, label, framing in list(TURNAROUND_SLOTS) + list(EXPRESSION_SLOTS)
+}
+
+
+def resolve_sheet_slots(
+    *,
+    group: str | None = None,
+    slot_keys: list[str] | None = None,
+) -> list[tuple[str, str, str]]:
+    """Pick sheet slots: explicit keys, or group turnaround|expression|all."""
+    if slot_keys:
+        out: list[tuple[str, str, str]] = []
+        for key in slot_keys:
+            item = ALL_SLOTS.get(key)
+            if item:
+                out.append(item)
+        if not out:
+            raise ValueError(f"unknown_sheet_slots:{slot_keys}")
+        return out
+    g = (group or "all").strip().lower()
+    if g in {"turnaround", "三视图"}:
+        return list(TURNAROUND_SLOTS)
+    if g in {"expression", "expressions", "表情"}:
+        return list(EXPRESSION_SLOTS)
+    if g in {"all", "全部", ""}:
+        return list(TURNAROUND_SLOTS) + list(EXPRESSION_SLOTS)
+    raise ValueError(f"unknown_sheet_group:{group}")
+
 
 def _basename(path_str: str) -> str:
     return Path(path_str).name.strip()
@@ -36,6 +66,8 @@ def generate_character_sheets(
     character: dict,
     backend: ImageBackend,
     *,
+    group: str | None = "all",
+    slot_keys: list[str] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
@@ -46,7 +78,7 @@ def generate_character_sheets(
     trigger = str(profile.get("trigger") or "")
     look = str(profile.get("prompt_zh") or profile.get("name") or "")
     lora = _lora_name(profile, vpaths, cid)
-    slots = list(TURNAROUND_SLOTS) + list(EXPRESSION_SLOTS)
+    slots = resolve_sheet_slots(group=group, slot_keys=slot_keys)
     created: list[dict[str, str]] = []
     total = len(slots)
     for i, (key, label, framing) in enumerate(slots):
@@ -74,7 +106,6 @@ def generate_character_sheets(
         dest.with_suffix(".meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        # Caption for kohya / LoRA fine-tune (sidecar .txt next to png).
         kind = "turnaround" if key.startswith("turnaround_") else "expression"
         caption = (
             f"{trigger}, {look}, {label}, {framing}, "
@@ -89,4 +120,10 @@ def generate_character_sheets(
     vpaths.profile_json(cid).write_text(
         json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    return {"character_id": cid, "files": created, "trigger": trigger}
+    return {
+        "character_id": cid,
+        "files": created,
+        "trigger": trigger,
+        "group": group,
+        "slot_keys": [s[0] for s in slots],
+    }

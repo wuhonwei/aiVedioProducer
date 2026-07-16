@@ -40,6 +40,15 @@ def test_workflow_portrait_size_and_lora():
     assert wf["6"]["inputs"]["clip"] == ["10", 1]
 
 
+def test_resolve_sheet_slots_groups():
+    from aivp.visual.sheets import resolve_sheet_slots
+
+    assert len(resolve_sheet_slots(group="turnaround")) == 3
+    assert len(resolve_sheet_slots(group="expression")) == 8
+    assert len(resolve_sheet_slots(slot_keys=["expr_happy"])) == 1
+    assert resolve_sheet_slots(slot_keys=["expr_happy"])[0][0] == "expr_happy"
+
+
 def test_generate_character_sheets_stub(tmp_path: Path):
     vpaths = VisualPaths(tmp_path, "p1")
     vpaths.ensure()
@@ -49,11 +58,22 @@ def test_generate_character_sheets_stub(tmp_path: Path):
         "tier": "major",
         "prompt_zh": "青灰长衫少年",
     }
-    out = generate_character_sheets(vpaths, character, StubImageBackend())
-    expected = len(TURNAROUND_SLOTS) + len(EXPRESSION_SLOTS)
-    assert len(out["files"]) == expected
+    out = generate_character_sheets(
+        vpaths, character, StubImageBackend(), group="turnaround"
+    )
+    assert len(out["files"]) == 3
     assert (vpaths.sheets_dir("ent_0001") / "sheet_turnaround_front.png").exists()
+    one = generate_character_sheets(
+        vpaths,
+        character,
+        StubImageBackend(),
+        slot_keys=["expr_confused"],
+    )
+    assert len(one["files"]) == 1
     assert (vpaths.sheets_dir("ent_0001") / "sheet_expr_confused.png").exists()
+    all_out = generate_character_sheets(vpaths, character, StubImageBackend())
+    expected = len(TURNAROUND_SLOTS) + len(EXPRESSION_SLOTS)
+    assert len(all_out["files"]) == expected
     assert (vpaths.sheets_dir("ent_0001") / "sheet_expr_happy.png").exists()
 
 

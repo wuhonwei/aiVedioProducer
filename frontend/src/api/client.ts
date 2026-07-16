@@ -296,6 +296,21 @@ export const startVisualCandidates = (
     body: JSON.stringify(body || {}),
   });
 
+export const startVisualSheets = (
+  projectId: string,
+  characterId: string,
+  opts?: { group?: string; slot_keys?: string[] },
+) =>
+  req<{ id: string; status: string }>(`/api/projects/${projectId}/visual/sheets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      character_id: characterId,
+      group: opts?.group ?? "all",
+      slot_keys: opts?.slot_keys,
+    }),
+  });
+
 export const getVisualJob = (projectId: string, jobId: string) =>
   req<{
     id: string;
@@ -339,16 +354,6 @@ export const visualT2I = (
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
-
-export const startVisualSheets = (
-  projectId: string,
-  characterId: string,
-) =>
-  req<{ id: string; status: string }>(`/api/projects/${projectId}/visual/sheets`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ character_id: characterId }),
   });
 
 export const deleteVisualFile = (

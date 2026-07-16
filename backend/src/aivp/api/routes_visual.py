@@ -81,6 +81,28 @@ class T2IBody(BaseModel):
 
 class SheetsBody(BaseModel):
     character_id: str
+    # all | turnaround | expression — ignored when slot_keys set
+    group: str = "all"
+    # e.g. ["turnaround_front"] or ["expr_calm"] for single-shot
+    slot_keys: list[str] | None = None
+
+
+@router.get("/projects/{project_id}/visual/sheet-slots")
+def list_sheet_slots(
+    project_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    from aivp.visual.prompts import EXPRESSION_SLOTS, TURNAROUND_SLOTS
+
+    return {
+        "turnaround": [
+            {"key": k, "label": lab} for k, lab, _ in TURNAROUND_SLOTS
+        ],
+        "expression": [
+            {"key": k, "label": lab} for k, lab, _ in EXPRESSION_SLOTS
+        ],
+    }
 
 
 @router.get("/projects/{project_id}/visual/characters")
@@ -282,6 +304,8 @@ def start_sheets(
                 vpaths,
                 character,
                 backend,
+                group=body.group,
+                slot_keys=body.slot_keys,
                 on_progress=on_progress,
             )
             data["status"] = "succeeded"
