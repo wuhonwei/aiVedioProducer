@@ -1,0 +1,117 @@
+from pathlib import Path
+
+import json
+
+from fastapi.testclient import TestClient
+
+from aivp.api.app import create_app
+from aivp.config import Settings
+from aivp.paths import ProjectPaths
+from aivp.visual.image_backend import StubImageBackend, build_sdxl_txt2img_workflow
+from aivp.visual.paths import VisualPaths
+from aivp.visual.prompts import EXPRESSION_SLOTS, PROBE_FRAMING, TURNAROUND_SLOTS
+from aivp.visual.sheets import generate_character_sheets
+
+
+class FakeLlm:
+    def __init__(self, default=None):
+        self.default = default or {}
+
+    def complete_json(self, *args, **kwargs):
+        return self.default
+
+
+def test_workflow_portrait_size_and_lora():
+    wf = build_sdxl_txt2img_workflow(
+        checkpoint="Guofeng4.2XL.safetensors",
+        prompt="lin_aivp, boy",
+        negative="blurry",
+        seed=1,
+        width=768,
+        height=1024,
+        lora_name="char.safetensors",
+        lora_strength=0.75,
+    )
+    assert wf["5"]["inputs"]["width"] == 768
+    assert wf["5"]["inputs"]["height"] == 1024
+    assert wf["10"]["class_type"] == "LoraLoader"
+    assert wf["10"]["inputs"]["lora_name"] == "char.safetensors"
+    assert wf["3"]["inputs"]["model"] == ["10", 0]
+    assert wf["6"]["inputs"]["clip"] == ["10", 1]
+
+
+def test_generate_character_sheets_stub(tmp_path: Path):
+    vpaths = VisualPaths(tmp_path, "p1")
+    vpaths.ensure()
+    character = {
+        "id": "ent_0001",
+        "name": "林启之",
+        "tier": "major",
+        "prompt_zh": "青灰长衫少年",
+    }
+    out = generate_character_sheets(vpaths, character, StubImageBackend())
+    expected = len(TURNAROUND_SLOTS) + len(EXPRESSION_SLOTS)
+    assert len(out["files"]) == expected
+    assert (vpaths.sheets_dir("ent_0001") / "sheet_turnaround_front.png").exists()
+    assert (vpaths.sheets_dir("ent_0001") / "sheet_expr_confused.png").exists()
+    assert (vpaths.sheets_dir("ent_0001") / "sheet_expr_happy.png").exists()
+
+
+def test_visual_sheets_and_delete_api(tmp_path: Path):
+    app = create_app(
+        Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path/'v.db'}", image_backend="stub")
+    )
+    app.state.run_jobs_inline = True
+    app.state.llm = FakeLlm(default={})
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"name": "视觉表"}).json()["id"]
+    paths = ProjectPaths(tmp_path, pid)
+    paths.ensure()
+    paths.auto_bible_json.write_text(
+        json.dumps(
+            {
+                "characters": [
+                    {
+                        "id": "ent_0001",
+                        "name": "林启之",
+                        "tier": "major",
+                        "prompt_zh": "青灰长衫少年",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    job = client.post(
+        f"/api/projects/{pid}/visual/sheets",
+        json={"character_id": "ent_0001"},
+    )
+    assert job.status_code == 202
+    jid = job.json()["id"]
+    status = client.get(f"/api/projects/{pid}/visual/jobs/{jid}")
+    assert status.status_code == 200
+    assert status.json()["status"] == "succeeded"
+
+    listed = client.get(f"/api/projects/{pid}/visual/characters")
+    assert listed.status_code == 200
+    ch = listed.json()["characters"][0]
+    assert ch["sheet_count"] >= 3
+    fname = ch["sheets"][0]
+    got = client.get(f"/api/projects/{pid}/visual/characters/ent_0001/files/sheets/{fname}")
+    assert got.status_code == 200
+    deleted = client.delete(
+        f"/api/projects/{pid}/visual/characters/ent_0001/files/sheets/{fname}"
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    missing = client.get(
+        f"/api/projects/{pid}/visual/characters/ent_0001/files/sheets/{fname}"
+    )
+    assert missing.status_code == 404
+
+
+def test_probe_framing_mentions_person():
+    assert "1person" in PROBE_FRAMING
+    assert "人物半身特写" in PROBE_FRAMING

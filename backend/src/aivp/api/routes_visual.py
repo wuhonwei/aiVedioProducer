@@ -22,7 +22,10 @@ from aivp.visual.image_backend import get_image_backend
 from aivp.visual.lora_train import run_lora_train
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import character_status, ensure_profile, load_major_characters
+from aivp.visual.sheets import generate_character_sheets
 from aivp.visual.t2i import generate_with_character
+
+_VISUAL_FOLDERS = frozenset({"candidates", "curated", "generations", "lora", "sheets"})
 
 router = APIRouter(tags=["visual"])
 
@@ -73,6 +76,10 @@ class T2IBody(BaseModel):
     character_id: str
     prompt: str
     shot_id: str | None = None
+
+
+class SheetsBody(BaseModel):
+    character_id: str
 
 
 @router.get("/projects/{project_id}/visual/characters")
@@ -223,6 +230,69 @@ def t2i(
     )
 
 
+@router.post("/projects/{project_id}/visual/sheets", status_code=202)
+def start_sheets(
+    project_id: str,
+    request: Request,
+    body: SheetsBody,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    bible = _load_bible(settings, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    vpaths.ensure()
+    majors = load_major_characters(bible)
+    character = next((c for c in majors if str(c.get("id")) == body.character_id), None)
+    if not character:
+        raise HTTPException(status_code=404, detail="character not found")
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id,
+        "project_id": project_id,
+        "kind": "visual_sheets",
+        "status": "queued",
+        "progress_done": 0,
+        "progress_total": 0,
+        "error": None,
+        "result": None,
+    }
+    path = _job_path(vpaths, job_id)
+    _write_job(path, job)
+
+    def _worker() -> None:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["status"] = "running"
+        _write_job(path, data)
+        try:
+            backend = get_image_backend(settings)
+
+            def on_progress(done: int, total: int) -> None:
+                data["progress_done"] = done
+                data["progress_total"] = total
+                _write_job(path, data)
+
+            result = generate_character_sheets(
+                vpaths,
+                character,
+                backend,
+                on_progress=on_progress,
+            )
+            data["status"] = "succeeded"
+            data["result"] = result
+            _write_job(path, data)
+        except Exception as e:  # noqa: BLE001
+            data["status"] = "failed"
+            data["error"] = str(e)
+            _write_job(path, data)
+
+    if getattr(request.app.state, "run_jobs_inline", False):
+        _worker()
+    else:
+        threading.Thread(target=_worker, daemon=False, name=f"aivp-sheets-{job_id}").start()
+    return job
+
+
 @router.get("/projects/{project_id}/visual/characters/{character_id}/files/{folder}/{filename}")
 def get_visual_file(
     project_id: str,
@@ -233,7 +303,7 @@ def get_visual_file(
     settings: Settings = Depends(get_settings),
 ) -> FileResponse:
     _require_project(db, project_id)
-    if folder not in {"candidates", "curated", "generations", "lora"}:
+    if folder not in _VISUAL_FOLDERS:
         raise HTTPException(status_code=400, detail="invalid folder")
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="invalid filename")
@@ -242,3 +312,29 @@ def get_visual_file(
     if not path.exists():
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(path)
+
+
+@router.delete("/projects/{project_id}/visual/characters/{character_id}/files/{folder}/{filename}")
+def delete_visual_file(
+    project_id: str,
+    character_id: str,
+    folder: str,
+    filename: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    if folder not in {"candidates", "generations", "sheets"}:
+        raise HTTPException(status_code=400, detail="folder not deletable")
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    vpaths = VisualPaths(settings.data_root, project_id)
+    path = vpaths.character_dir(character_id) / folder / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+    path.unlink()
+    for side in (path.with_suffix(".json"), path.with_suffix(".txt"), path.with_suffix(".meta.json")):
+        if side.exists():
+            side.unlink()
+    # Also drop sidecar named like file.png.meta.json handled above; cand captions use .txt
+    return {"deleted": True, "folder": folder, "filename": filename}

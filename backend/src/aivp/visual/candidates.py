@@ -8,17 +8,18 @@ from typing import Any
 from aivp.visual.image_backend import ImageBackend
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters
+from aivp.visual.prompts import CHARACTER_NEGATIVE
 
 
 VIEW_PROMPTS = [
-    "facing camera, portrait, upper body",
-    "three quarter view, standing, full body",
-    "side profile, upper body",
-    "looking away, soft light, upper body",
-    "over the shoulder, dramatic light",
-    "close-up face, detailed eyes",
-    "walking pose, full body",
-    "sitting pose, medium shot",
+    "solo, 1person, facing camera, portrait, upper body, simple background",
+    "solo, 1person, three quarter view, standing, full body, simple background",
+    "solo, 1person, side profile, upper body, simple background",
+    "solo, 1person, looking away, soft light, upper body, simple background",
+    "solo, 1person, over the shoulder, dramatic light, simple background",
+    "solo, 1person, close-up face, detailed eyes, simple background",
+    "solo, 1person, walking pose, full body, simple background",
+    "solo, 1person, sitting pose, medium shot, simple background",
 ]
 
 
@@ -47,7 +48,7 @@ def generate_candidates_for_character(
     backend: ImageBackend,
     *,
     count: int = 8,
-    negative: str = "lowres, blurry, modern clothes, extra fingers",
+    negative: str | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     profile = ensure_profile(vpaths, character)
@@ -55,13 +56,21 @@ def generate_candidates_for_character(
     out_dir = vpaths.candidates_dir(cid)
     created: list[str] = []
     n = max(1, min(count, len(VIEW_PROMPTS)))
+    neg = negative or CHARACTER_NEGATIVE
     for i in range(n):
         if should_cancel and should_cancel():
             break
         view = VIEW_PROMPTS[i % len(VIEW_PROMPTS)]
         prompt = build_candidate_prompt(profile, view)
         dest = out_dir / f"cand_{i+1:02d}.png"
-        backend.generate(prompt=prompt, negative=negative, dest=dest, seed=1000 + i)
+        backend.generate(
+            prompt=prompt,
+            negative=neg,
+            dest=dest,
+            seed=1000 + i,
+            width=768,
+            height=1024,
+        )
         # caption for later training
         (out_dir / f"cand_{i+1:02d}.txt").write_text(
             f"{profile['trigger']}, {view}, {profile.get('prompt_zh') or ''}".strip(),

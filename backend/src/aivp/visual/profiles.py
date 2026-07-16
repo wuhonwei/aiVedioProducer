@@ -62,13 +62,19 @@ def ensure_profile(vpaths: VisualPaths, character: dict) -> dict[str, Any]:
 def character_status(vpaths: VisualPaths, character_id: str, profile: dict) -> dict[str, Any]:
     cand = list(vpaths.candidates_dir(character_id).glob("*.png"))
     curated = list(vpaths.curated_dir(character_id).glob("*.png"))
+    sheets = list(vpaths.sheets_dir(character_id).glob("*.png"))
+    gens = list(vpaths.generations_dir(character_id).glob("*.png"))
     loras = list(vpaths.lora_dir(character_id).glob("*.safetensors"))
     return {
         **profile,
         "candidate_count": len(cand),
         "curated_count": len(curated),
+        "sheet_count": len(sheets),
+        "generation_count": len(gens),
         "lora_ready": bool(loras) or bool(profile.get("lora_file")),
         "lora_files": [p.name for p in loras],
         "candidates": sorted(p.name for p in cand),
         "curated": sorted(p.name for p in curated),
+        "sheets": sorted(p.name for p in sheets),
+        "generations": sorted((p.name for p in gens), reverse=True),
     }

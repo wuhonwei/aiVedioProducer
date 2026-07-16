@@ -10,7 +10,18 @@ import httpx
 
 
 class ImageBackend(Protocol):
-    def generate(self, *, prompt: str, negative: str, dest: Path, seed: int | None = None) -> Path: ...
+    def generate(
+        self,
+        *,
+        prompt: str,
+        negative: str,
+        dest: Path,
+        seed: int | None = None,
+        width: int = 768,
+        height: int = 1024,
+        lora_name: str | None = None,
+        lora_strength: float = 0.75,
+    ) -> Path: ...
 
     def healthy(self) -> bool: ...
 
@@ -21,17 +32,30 @@ class StubImageBackend:
     def healthy(self) -> bool:
         return True
 
-    def generate(self, *, prompt: str, negative: str, dest: Path, seed: int | None = None) -> Path:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        negative: str,
+        dest: Path,
+        seed: int | None = None,
+        width: int = 768,
+        height: int = 1024,
+        lora_name: str | None = None,
+        lora_strength: float = 0.75,
+    ) -> Path:
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             from PIL import Image, ImageDraw
         except ImportError:
             raise RuntimeError("pillow_required_for_stub_backend") from None
 
-        img = Image.new("RGB", (768, 1024), color=(30 + (seed or 0) % 40, 50, 70))
+        w = max(64, int(width))
+        h = max(64, int(height))
+        img = Image.new("RGB", (w, h), color=(30 + (seed or 0) % 40, 50, 70))
         draw = ImageDraw.Draw(img)
         title = (prompt or "character")[:80]
-        draw.rectangle((40, 40, 728, 180), outline=(220, 200, 160), width=3)
+        draw.rectangle((40, 40, w - 40, 180), outline=(220, 200, 160), width=3)
         draw.text((56, 60), "AIVP stub sheet", fill=(240, 230, 210))
         y = 220
         line = ""
@@ -43,12 +67,23 @@ class StubImageBackend:
                 line = ""
         if line:
             draw.text((56, y), line, fill=(230, 220, 200))
-        draw.text((56, 960), f"seed={seed or 0}", fill=(180, 170, 150))
+        draw.text((56, h - 64), f"seed={seed or 0}", fill=(180, 170, 150))
+        if lora_name:
+            draw.text((56, h - 36), f"lora={lora_name}", fill=(180, 170, 150))
         img.save(dest, format="PNG")
         meta = dest.with_suffix(".json")
         meta.write_text(
             json.dumps(
-                {"prompt": prompt, "negative": negative, "seed": seed, "backend": "stub"},
+                {
+                    "prompt": prompt,
+                    "negative": negative,
+                    "seed": seed,
+                    "backend": "stub",
+                    "width": w,
+                    "height": h,
+                    "lora_name": lora_name,
+                    "lora_strength": lora_strength,
+                },
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -63,32 +98,22 @@ def build_sdxl_txt2img_workflow(
     prompt: str,
     negative: str,
     seed: int,
-    width: int = 1024,
+    width: int = 768,
     height: int = 1024,
     steps: int = 28,
     cfg: float = 8.0,
     filename_prefix: str = "aivp",
+    lora_name: str | None = None,
+    lora_strength: float = 0.75,
 ) -> dict[str, Any]:
     """ComfyUI API-format graph for SDXL txt2img (GuoFeng / similar)."""
     ckpt = (checkpoint or "").strip()
     if not ckpt:
         raise RuntimeError("comfy_checkpoint_empty")
-    return {
-        "3": {
-            "class_type": "KSampler",
-            "inputs": {
-                "seed": int(seed),
-                "steps": int(steps),
-                "cfg": float(cfg),
-                "sampler_name": "dpmpp_2m_sde",
-                "scheduler": "karras",
-                "denoise": 1,
-                "model": ["4", 0],
-                "positive": ["6", 0],
-                "negative": ["7", 0],
-                "latent_image": ["5", 0],
-            },
-        },
+
+    model_src: list[Any] = ["4", 0]
+    clip_src: list[Any] = ["4", 1]
+    nodes: dict[str, Any] = {
         "4": {
             "class_type": "CheckpointLoaderSimple",
             "inputs": {"ckpt_name": ckpt},
@@ -101,14 +126,6 @@ def build_sdxl_txt2img_workflow(
                 "batch_size": 1,
             },
         },
-        "6": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {"text": prompt, "clip": ["4", 1]},
-        },
-        "7": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {"text": negative, "clip": ["4", 1]},
-        },
         "8": {
             "class_type": "VAEDecode",
             "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
@@ -118,6 +135,46 @@ def build_sdxl_txt2img_workflow(
             "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
         },
     }
+
+    lora = (lora_name or "").strip()
+    if lora:
+        nodes["10"] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": lora,
+                "strength_model": float(lora_strength),
+                "strength_clip": float(lora_strength),
+                "model": ["4", 0],
+                "clip": ["4", 1],
+            },
+        }
+        model_src = ["10", 0]
+        clip_src = ["10", 1]
+
+    nodes["6"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": prompt, "clip": clip_src},
+    }
+    nodes["7"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": negative, "clip": clip_src},
+    }
+    nodes["3"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": int(seed),
+            "steps": int(steps),
+            "cfg": float(cfg),
+            "sampler_name": "dpmpp_2m_sde",
+            "scheduler": "karras",
+            "denoise": 1,
+            "model": model_src,
+            "positive": ["6", 0],
+            "negative": ["7", 0],
+            "latent_image": ["5", 0],
+        },
+    }
+    return nodes
 
 
 class ComfyImageBackend:
@@ -142,7 +199,18 @@ class ComfyImageBackend:
         except httpx.HTTPError:
             return False
 
-    def generate(self, *, prompt: str, negative: str, dest: Path, seed: int | None = None) -> Path:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        negative: str,
+        dest: Path,
+        seed: int | None = None,
+        width: int = 768,
+        height: int = 1024,
+        lora_name: str | None = None,
+        lora_strength: float = 0.75,
+    ) -> Path:
         if not self.healthy():
             raise RuntimeError("comfyui_unreachable")
         if not (self.checkpoint or "").strip():
@@ -158,6 +226,10 @@ class ComfyImageBackend:
             prompt=prompt,
             negative=negative or "lowres, blurry, bad anatomy, watermark",
             seed=int(seed if seed is not None else 0),
+            width=width,
+            height=height,
+            lora_name=lora_name,
+            lora_strength=lora_strength,
         )
         dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -213,6 +285,10 @@ class ComfyImageBackend:
                         "backend": "comfy",
                         "prompt_id": prompt_id,
                         "comfy_file": meta,
+                        "width": width,
+                        "height": height,
+                        "lora_name": lora_name,
+                        "lora_strength": lora_strength,
                     },
                     ensure_ascii=False,
                     indent=2,

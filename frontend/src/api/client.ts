@@ -260,9 +260,13 @@ export type VisualCharacter = {
   trigger: string;
   candidate_count: number;
   curated_count: number;
+  sheet_count?: number;
+  generation_count?: number;
   lora_ready: boolean;
   candidates: string[];
   curated: string[];
+  sheets?: string[];
+  generations?: string[];
   status?: string;
   prompt_zh?: string;
 };
@@ -325,6 +329,27 @@ export const visualT2I = (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+
+export const startVisualSheets = (
+  projectId: string,
+  characterId: string,
+) =>
+  req<{ id: string; status: string }>(`/api/projects/${projectId}/visual/sheets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ character_id: characterId }),
+  });
+
+export const deleteVisualFile = (
+  projectId: string,
+  characterId: string,
+  folder: string,
+  filename: string,
+) =>
+  req<{ deleted: boolean }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/files/${folder}/${filename}`,
+    { method: "DELETE" },
+  );
 
 export const visualFileUrl = (
   projectId: string,

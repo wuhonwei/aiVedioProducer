@@ -8,13 +8,14 @@ describe("defaultProbePrompt", () => {
       prompt_zh: "林砚之，行旅青年，身着青灰布衣与半旧蓝布包袱",
     });
     expect(p).toContain("蓝布包袱");
-    expect(p).toContain("半身中景");
+    expect(p).toContain("1person");
+    expect(p).toContain("人物半身特写");
   });
 
   it("falls back to name", () => {
     const p = defaultProbePrompt({ name: "周大人", prompt_zh: "" });
     expect(p.startsWith("周大人")).toBe(true);
-    expect(p).toContain("半身中景");
+    expect(p).toContain("upper body portrait");
   });
 
   it("differs across characters", () => {

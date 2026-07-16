@@ -29,11 +29,19 @@ class VisualPaths:
     def lora_dir(self, character_id: str) -> Path:
         return self.character_dir(character_id) / "lora"
 
+    def generations_dir(self, character_id: str) -> Path:
+        return self.character_dir(character_id) / "generations"
+
+    def sheets_dir(self, character_id: str) -> Path:
+        return self.character_dir(character_id) / "sheets"
+
     def ensure_character(self, character_id: str) -> None:
         for d in (
             self.character_dir(character_id),
             self.candidates_dir(character_id),
             self.curated_dir(character_id),
             self.lora_dir(character_id),
+            self.generations_dir(character_id),
+            self.sheets_dir(character_id),
         ):
             d.mkdir(parents=True, exist_ok=True)
