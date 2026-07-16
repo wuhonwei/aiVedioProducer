@@ -3,6 +3,8 @@ import {
   cancelJob,
   getJob,
   getLatestJob,
+  getPipelineReport,
+  listPipelineReports,
   startJob,
   uploadSource,
   type Job,
@@ -14,6 +16,17 @@ type Props = {
 
 const ACTIVE = new Set(["queued", "running", "cancelling"]);
 const TERMINAL = new Set(["succeeded", "failed", "step_failed", "cancelled"]);
+const REPORT_LABELS: Record<string, string> = {
+  clean: "清洗",
+  clean_metadata: "清洗元数据",
+  chapters: "章节",
+  chunks: "Chunk",
+  extract: "抽取",
+  extract_errors: "抽取错误",
+  normalize: "实体归一",
+  candidate_pairs: "合并候选对",
+  uncertain_entities: "不确定实体",
+};
 
 function jobStorageKey(projectId: string) {
   return `aivp.activeJob.${projectId}`;
@@ -27,6 +40,14 @@ export function PipelinePage({ projectId }: Props) {
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [forceEnrich, setForceEnrich] = useState(false);
+  const [reports, setReports] = useState<
+    Array<{ name: string; available: boolean; path: string }>
+  >([]);
+  const [reportPreview, setReportPreview] = useState<{
+    name: string;
+    data: unknown;
+  } | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = () => {
@@ -54,6 +75,7 @@ export function PipelinePage({ projectId }: Props) {
           rememberJob(j);
           if (TERMINAL.has(j.status)) {
             stopPolling();
+            void refreshReports();
           }
           if (j.error_message && j.status !== "cancelled") {
             setError(j.error_message);
@@ -64,6 +86,15 @@ export function PipelinePage({ projectId }: Props) {
         }
       })();
     }, 1000);
+  };
+
+  const refreshReports = async () => {
+    try {
+      const data = await listPipelineReports(projectId);
+      setReports(data.reports || []);
+    } catch {
+      setReports([]);
+    }
   };
 
   useEffect(() => {
@@ -77,6 +108,9 @@ export function PipelinePage({ projectId }: Props) {
         if (ACTIVE.has(latest.status)) {
           pollJob(latest.id);
         }
+        if (TERMINAL.has(latest.status)) {
+          await refreshReports();
+        }
       } catch {
         const cached = localStorage.getItem(jobStorageKey(projectId));
         if (!cached || cancelled) return;
@@ -89,6 +123,7 @@ export function PipelinePage({ projectId }: Props) {
           localStorage.removeItem(jobStorageKey(projectId));
         }
       }
+      if (!cancelled) await refreshReports();
     })();
     return () => {
       cancelled = true;
@@ -96,6 +131,19 @@ export function PipelinePage({ projectId }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  const openReport = async (name: string) => {
+    setReportBusy(true);
+    setError(null);
+    try {
+      const data = await getPipelineReport(projectId, name);
+      setReportPreview({ name, data });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReportBusy(false);
+    }
+  };
 
   const onUpload = async () => {
     if (!file) return;
@@ -301,6 +349,64 @@ export function PipelinePage({ projectId }: Props) {
           {error}
         </p>
       )}
+
+      <div className="stack" style={{ marginTop: 16 }}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <h3 style={{ margin: 0 }}>文本质量报告</h3>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={reportBusy}
+            onClick={() => void refreshReports()}
+          >
+            刷新报告
+          </button>
+        </div>
+        <p className="note">
+          查看清洗 / 章节 / chunk / 抽取 / 归一化报告，判断结构化是否可信（任务
+          succeeded 但章节只有 1 章时即属业务失败）。
+        </p>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+          {reports.map((r) => (
+            <button
+              key={r.name}
+              type="button"
+              className="btn btn-secondary"
+              disabled={!r.available || reportBusy}
+              onClick={() => void openReport(r.name)}
+              title={r.path}
+            >
+              {REPORT_LABELS[r.name] || r.name}
+              {r.available ? "" : "（无）"}
+            </button>
+          ))}
+          {!reports.length && <span className="note">尚无报告（请先跑通流水线）。</span>}
+        </div>
+        {reportPreview && (
+          <div className="status-card">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <strong>{REPORT_LABELS[reportPreview.name] || reportPreview.name}</strong>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setReportPreview(null)}
+              >
+                关闭
+              </button>
+            </div>
+            <pre
+              style={{
+                maxHeight: 320,
+                overflow: "auto",
+                fontSize: 12,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {JSON.stringify(reportPreview.data, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

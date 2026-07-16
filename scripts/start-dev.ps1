@@ -1,4 +1,4 @@
-﻿# AIVP one-click start: backend :8000 + frontend :5173
+# AIVP one-click start: backend :8000 + frontend :5173
 # Usage: .\scripts\start-dev.ps1  or double-click start-dev.bat
 
 $ErrorActionPreference = "Stop"

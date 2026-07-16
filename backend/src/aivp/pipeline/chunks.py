@@ -53,15 +53,38 @@ def chunk_chapters(chapters: list[dict], size: int = 4000, overlap: int = 500) -
     return out
 
 
-def chunk_report(chunks: list[dict], size: int, overlap: int) -> dict:
+def chunk_report(
+    chunks: list[dict],
+    size: int,
+    overlap: int,
+    *,
+    too_many_chunks_threshold: int = 12,
+) -> dict:
     counts = [c.get("char_count", len(c.get("text", ""))) for c in chunks]
     avg = int(sum(counts) / len(counts)) if counts else 0
+    by_chapter: dict[str, int] = {}
+    for c in chunks:
+        cid = str(c.get("chapter_id") or "")
+        by_chapter[cid] = by_chapter.get(cid, 0) + 1
+    warnings = []
+    for chapter_id, n in sorted(by_chapter.items()):
+        if n >= too_many_chunks_threshold:
+            warnings.append(
+                {
+                    "chapter_id": chapter_id,
+                    "reason": "too_many_chunks",
+                    "chunk_count": n,
+                }
+            )
     return {
         "chunk_count": len(chunks),
         "avg_char_count": avg,
+        "max_char_count": max(counts) if counts else 0,
+        "min_char_count": min(counts) if counts else 0,
         "chunk_size": size,
         "chunk_overlap": overlap,
-        "warnings": [],
+        "chapters_with_chunks": len(by_chapter),
+        "warnings": warnings,
     }
 
 

@@ -77,9 +77,7 @@ def test_build_assets_distinct_without_llm():
     assert len(set(wardrobes)) == 3
 
 
-def test_build_assets_repairs_cloned_llm_looks():
-    from aivp.pipeline.character_looks import look_signature
-
+def test_build_assets_fails_on_cloned_llm_looks():
     entities = {
         "characters": [
             {"id": "ent_0001", "name": "甲", "evidence": "甲"},
@@ -104,17 +102,12 @@ def test_build_assets_repairs_cloned_llm_looks():
             ]
         }
     )
-    assets = build_assets(entities, majors, llm, extracts=[])
-    chars = assets["characters"]
-    assert len(chars) == 2
-    prompts = [c["prompt_zh"] for c in chars]
-    assert len(set(prompts)) == 2
-    for card in chars:
-        assert "男性" in card["prompt_zh"]
-        assert card["appearance"]["body"]
-        assert card["appearance"]["eyes"]
-        assert card["wardrobe"]["default"]
-    assert look_signature(chars[0]) != look_signature(chars[1])
+    try:
+        build_assets(entities, majors, llm, extracts=[])
+        raised = False
+    except ValueError as e:
+        raised = str(e).startswith("enrich_distinct_characters_failed")
+    assert raised
 
 
 def test_run_enrich_writes_artifacts(tmp_path: Path):

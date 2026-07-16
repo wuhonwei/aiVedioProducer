@@ -5,8 +5,10 @@ from pathlib import Path
 
 AD_PATTERNS = [
     re.compile(r"https?://\S+", re.I),
+    re.compile(r"www\.\S+", re.I),
     re.compile(r"(最新网址|请收藏本站|手机用户请到|关注微信|加群).*", re.I),
     re.compile(r"(本站域名|记住网址|求推荐票|本章未完).*", re.I),
+    re.compile(r"(本书首发|无弹窗|txt下载|TXT下载|手机用户请浏览).*", re.I),
 ]
 
 
@@ -24,7 +26,10 @@ def clean_text(text: str) -> tuple[str, dict]:
         if not stripped:
             kept.append("")
             continue
-        is_url = bool(re.fullmatch(r"https?://\S+", stripped, flags=re.I))
+        is_url = bool(
+            re.fullmatch(r"https?://\S+", stripped, flags=re.I)
+            or re.fullmatch(r"www\.\S+", stripped, flags=re.I)
+        )
         is_ad = any(p.search(stripped) for p in AD_PATTERNS)
         if is_url:
             removed_lines += 1
@@ -52,7 +57,6 @@ def clean_text(text: str) -> tuple[str, dict]:
 
 def run_clean(source: Path, dest: Path) -> Path:
     raw = source.read_bytes()
-    raw_char_count = len(raw)
     detected = None
     text = None
     for enc in ("utf-8-sig", "utf-8", "gb18030"):
@@ -68,10 +72,12 @@ def run_clean(source: Path, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(cleaned, encoding="utf-8")
     meta = {
+        "novel_id": dest.parent.parent.parent.name if dest.parent.parent.parent else "",
         "title": "未知标题",
         "source_file": str(source.name),
         "detected_encoding": detected,
-        "raw_char_count": raw_char_count,
+        "raw_bytes": len(raw),
+        "raw_char_count": len(text),
         "clean_char_count": len(cleaned),
         "language": "zh-CN",
         "created_at": datetime.now(timezone.utc).isoformat(),

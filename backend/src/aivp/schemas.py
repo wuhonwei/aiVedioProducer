@@ -15,14 +15,37 @@ class EvidenceFact(BaseModel):
     confidence: float = 0.0
 
 
+class CharacterMention(BaseModel):
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    identity_hint: str = ""
+    appearance: list[EvidenceFact] = Field(default_factory=list)
+    personality: list[EvidenceFact] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
+    emotion: str = ""
+    evidence: str = ""
+
+
 class EventFact(BaseModel):
     summary: str
     evidence: str = ""
     participants: list[str] = Field(default_factory=list)
     location: str = ""
     time_hint: str = ""
+    cause: str = ""
+    process: str = ""
+    result: str = ""
     importance: float = 0.0
     visual_score: float = 0.0
+
+
+class VisualCandidate(BaseModel):
+    scene: str = ""
+    visual_score: float = 0.0
+    reason: str = ""
+    suggested_shots: list[str] = Field(default_factory=list)
+    difficulty: str = ""
+    evidence: str = ""
 
 
 class ChunkQuality(BaseModel):
@@ -46,6 +69,7 @@ class ChunkExtract(BaseModel):
     voice_cues: list[str] = Field(default_factory=list)
     adaptation_notes: list[str] = Field(default_factory=list)
     quality: ChunkQuality = Field(default_factory=ChunkQuality)
+    schema_version: str = "2"
 
 
 REQUIRED_BIBLE_KEYS = [

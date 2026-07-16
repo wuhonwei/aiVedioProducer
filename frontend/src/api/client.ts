@@ -31,6 +31,16 @@ export type StartJobOptions = {
   chapterTo?: string | null;
 };
 
+export const getPipelineReport = (projectId: string, reportName: string) =>
+  req<Record<string, unknown> | unknown[]>(
+    `/api/projects/${projectId}/reports/${reportName}`,
+  );
+
+export const listPipelineReports = (projectId: string) =>
+  req<{ reports: Array<{ name: string; available: boolean; path: string }> }>(
+    `/api/projects/${projectId}/reports`,
+  );
+
 export type DeepseekHealth = {
   ok: boolean;
   configured: boolean;

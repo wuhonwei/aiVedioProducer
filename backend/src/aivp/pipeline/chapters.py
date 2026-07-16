@@ -11,6 +11,7 @@ HEADING_RE = re.compile(
     r"|序章(?:\s+.*)?$"
     r"|楔子(?:\s+.*)?$"
     r"|尾声(?:\s+.*)?$"
+    r"|后记(?:\s+.*)?$"
     r"|正文$"
     r"|番外[零一二三四五六七八九十百千0-9]*?(?:\s+.*)?$"
     r")",
@@ -28,7 +29,8 @@ def split_chapters(text: str) -> list[dict]:
         end = start + len(body)
         return [
             {
-                "id": "ch001",
+                "id": "chapter_0001",
+                "chapter_id": "chapter_0001",
                 "index": 1,
                 "title": "全文",
                 "text": body,
@@ -52,9 +54,11 @@ def split_chapters(text: str) -> list[dict]:
         while body_start < end and text[body_start] in "\r\n \t":
             body_start += 1
         body_end = body_start + len(body) if body else heading_end
+        chapter_id = f"chapter_{i+1:04d}"
         chapters.append(
             {
-                "id": f"ch{i+1:03d}",
+                "id": chapter_id,
+                "chapter_id": chapter_id,
                 "index": i + 1,
                 "title": title,
                 "text": body,

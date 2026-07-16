@@ -13,10 +13,14 @@ router = APIRouter(tags=["reports"])
 
 REPORT_MAP = {
     "clean": lambda p: p.clean_report_json,
+    "clean_metadata": lambda p: p.clean_metadata_json,
     "chapters": lambda p: p.chapter_report_json,
     "chunks": lambda p: p.chunk_report_json,
     "extract": lambda p: p.extract_report_json,
+    "extract_errors": lambda p: p.extract_errors_json,
     "normalize": lambda p: p.normalize_report_json,
+    "candidate_pairs": lambda p: p.candidate_pairs_json,
+    "uncertain_entities": lambda p: p.uncertain_entities_json,
 }
 
 
@@ -27,13 +31,28 @@ def _require_project(db: Session, project_id: str) -> Project:
     return project
 
 
+@router.get("/projects/{project_id}/reports")
+def list_reports(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    paths = ProjectPaths(settings.data_root, project_id)
+    available = []
+    for name, getter in REPORT_MAP.items():
+        path = getter(paths)
+        available.append({"name": name, "available": path.exists(), "path": str(path)})
+    return {"reports": available}
+
+
 @router.get("/projects/{project_id}/reports/{report_name}")
 def get_report(
     project_id: str,
     report_name: str,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
+) -> Any:
     _require_project(db, project_id)
     if report_name not in REPORT_MAP:
         raise HTTPException(status_code=404, detail=f"Unknown report: {report_name}")
