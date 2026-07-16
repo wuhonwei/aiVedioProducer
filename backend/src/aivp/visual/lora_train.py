@@ -32,14 +32,20 @@ def prepare_train_package(vpaths: VisualPaths, character_id: str, profile: dict)
     }
     package = lora_dir / "train_package.json"
     package.write_text(json.dumps(dataset, ensure_ascii=False, indent=2), encoding="utf-8")
-    # Caption check
+    # Caption check — prefer existing sheet/candidate captions.
+    trigger = profile.get("trigger") or character_id
+    look = (profile.get("prompt_zh") or "").strip()
     for img in curated:
         cap = img.with_suffix(".txt")
-        if not cap.exists():
+        if not cap.exists() or not cap.read_text(encoding="utf-8").strip():
+            tag = "character turnaround sheet" if "turnaround" in img.name else (
+                "character expression sheet" if "expr_" in img.name else "character reference"
+            )
             cap.write_text(
-                f"{profile.get('trigger')}, guofeng anime character",
+                f"{trigger}, {look}, {tag}, guofeng anime, consistent character design".strip(", "),
                 encoding="utf-8",
             )
+    dataset["caption_note"] = "sheets+candidates; each png has matching .txt for LoRA"
     return dataset
 
 

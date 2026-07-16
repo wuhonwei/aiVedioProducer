@@ -66,6 +66,7 @@ class CandidatesBody(BaseModel):
 
 class CurateBody(BaseModel):
     keep: list[str] = Field(default_factory=list)
+    keep_sheets: list[str] = Field(default_factory=list)
 
 
 class TrainBody(BaseModel):
@@ -185,7 +186,12 @@ def curate_character(
 ) -> dict[str, Any]:
     _require_project(db, project_id)
     vpaths = VisualPaths(settings.data_root, project_id)
-    return curate_candidates(vpaths, character_id, body.keep)
+    return curate_candidates(
+        vpaths,
+        character_id,
+        body.keep,
+        keep_sheets=body.keep_sheets,
+    )
 
 
 @router.post("/projects/{project_id}/visual/lora/train")

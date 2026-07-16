@@ -49,6 +49,7 @@ export function VisualPage({ projectId }: Props) {
   const [backend, setBackend] = useState("stub");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [selectedSheets, setSelectedSheets] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [probePrompt, setProbePrompt] = useState("");
@@ -84,6 +85,16 @@ export function VisualPage({ projectId }: Props) {
       next[name] = active.curated.includes(name);
     }
     setSelected(next);
+    const sheets = active.sheets || [];
+    const hasCuratedSheets = sheets.some((n) => active.curated.includes(n));
+    const sheetsNext: Record<string, boolean> = {};
+    for (const name of sheets) {
+      // LoRA primary set: default-select all sheets until user has curated some.
+      sheetsNext[name] = hasCuratedSheets
+        ? active.curated.includes(name)
+        : true;
+    }
+    setSelectedSheets(sheetsNext);
   }, [active]);
 
   useEffect(() => {
@@ -143,13 +154,26 @@ export function VisualPage({ projectId }: Props) {
       const keep = Object.entries(selected)
         .filter(([, v]) => v)
         .map(([k]) => k);
-      await curateVisualCharacter(projectId, active.character_id, keep);
+      const keepSheets = Object.entries(selectedSheets)
+        .filter(([, v]) => v)
+        .map(([k]) => k);
+      if (!keep.length && !keepSheets.length) {
+        throw new Error("请至少勾选候选图或角色表（三视图/表情）加入训练集");
+      }
+      await curateVisualCharacter(projectId, active.character_id, keep, keepSheets);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
+  };
+
+  const selectAllSheetsForLora = () => {
+    if (!active?.sheets?.length) return;
+    const next: Record<string, boolean> = {};
+    for (const name of active.sheets) next[name] = true;
+    setSelectedSheets(next);
   };
 
   const onTrain = async () => {
@@ -257,9 +281,10 @@ export function VisualPage({ projectId }: Props) {
     <section className="panel">
       <h2>角色视觉 / LoRA</h2>
       <p className="panel-lead">
-        仅 major 角色：候选图 → 角色表（三视图/表情）→ 训练集 → LoRA。当前后端：
+        仅 major 角色：候选图作补充；<strong>三视图 + 表情表</strong>专用于 LoRA
+        微调（生成时已写 caption）。勾选后「确认训练集」→「训练 / 导出包」。当前后端：
         <strong> {backend}</strong>
-        {backend === "stub" ? "（占位出图，接好 ComfyUI 后改 AIVP_IMAGE_BACKEND=comfy）" : ""}。
+        {backend === "stub" ? "（占位出图，接好 Comfy 后改 AIVP_IMAGE_BACKEND=comfy）" : ""}。
       </p>
 
       <div className="bible-layout">
@@ -311,7 +336,15 @@ export function VisualPage({ projectId }: Props) {
                   disabled={busy}
                   onClick={() => void onSheets()}
                 >
-                  生成角色表
+                  生成角色表（LoRA）
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy || !(active.sheets || []).length}
+                  onClick={() => selectAllSheetsForLora()}
+                >
+                  角色表全选入训
                 </button>
                 <button
                   type="button"
@@ -352,13 +385,33 @@ export function VisualPage({ projectId }: Props) {
                 )}
               </div>
 
-              <h4 style={{ marginBottom: 0 }}>角色表（三视图 / 表情）</h4>
+              <h4 style={{ marginBottom: 0 }}>角色表（三视图 / 表情 · LoRA 主训练集）</h4>
+              <p className="note">
+                含正面/侧面/背面与 8 种表情；每张旁有 caption，勾选后进入 curated 供微调。
+              </p>
               <div className="bible-cards" aria-label="sheet-grid">
                 {(active.sheets || []).map((name) =>
-                  renderThumb("sheets", name, sheetLabel(name)),
+                  renderThumb(
+                    "sheets",
+                    name,
+                    sheetLabel(name),
+                    <div className="row" style={{ marginBottom: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedSheets[name])}
+                        onChange={(e) =>
+                          setSelectedSheets((prev) => ({
+                            ...prev,
+                            [name]: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span>加入 LoRA 训练集</span>
+                    </div>,
+                  ),
                 )}
                 {!active.sheets?.length && (
-                  <p className="note">尚未生成角色表，点击「生成角色表」。</p>
+                  <p className="note">尚未生成角色表，点击「生成角色表（LoRA）」。</p>
                 )}
               </div>
 

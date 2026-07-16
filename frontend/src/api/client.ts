@@ -300,13 +300,14 @@ export const curateVisualCharacter = (
   projectId: string,
   characterId: string,
   keep: string[],
+  keepSheets?: string[],
 ) =>
-  req<{ curated: string[]; count: number }>(
+  req<{ curated: string[]; count: number; sources?: Array<{ folder: string; file: string }> }>(
     `/api/projects/${projectId}/visual/characters/${characterId}/curate`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keep }),
+      body: JSON.stringify({ keep, keep_sheets: keepSheets || [] }),
     },
   );
 

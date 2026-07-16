@@ -13,6 +13,7 @@ from aivp.visual.image_backend import StubImageBackend
 from aivp.visual.lora_train import prepare_train_package
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, slug_trigger
+from aivp.visual.sheets import generate_character_sheets
 
 
 def test_slug_trigger_stable():
@@ -37,12 +38,20 @@ def test_generate_curate_and_train_package(tmp_path: Path):
     assert out["count"] == 1
     assert len(out["characters"][0]["files"]) == 4
     keep = out["characters"][0]["files"][:2]
-    curated = curate_candidates(vpaths, "ent_0001", keep)
-    assert curated["count"] == 2
+    sheets = generate_character_sheets(vpaths, character, backend)
+    sheet_files = [f["file"] for f in sheets["files"][:3]]
+    assert (vpaths.sheets_dir("ent_0001") / sheet_files[0]).with_suffix(".txt").exists()
+    curated = curate_candidates(
+        vpaths, "ent_0001", keep, keep_sheets=sheet_files
+    )
+    assert curated["count"] == 2 + 3
+    assert any(s["folder"] == "sheets" for s in curated["sources"])
     profile = ensure_profile(vpaths, character)
     package = prepare_train_package(vpaths, "ent_0001", profile)
     assert package["trigger"]
     assert Path(package["output_dir"]).exists()
+    assert len(package["images"]) == 5
+    assert any("turnaround" in n or "expr_" in n for n in package["images"])
 
 
 def test_visual_api_candidates(tmp_path: Path):

@@ -69,11 +69,19 @@ def generate_character_sheets(
             "label": label,
             "file": dest.name,
             "prompt": prompt,
+            "for_lora": True,
         }
         dest.with_suffix(".meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        created.append({"key": key, "label": label, "file": dest.name})
+        # Caption for kohya / LoRA fine-tune (sidecar .txt next to png).
+        kind = "turnaround" if key.startswith("turnaround_") else "expression"
+        caption = (
+            f"{trigger}, {look}, {label}, {framing}, "
+            f"guofeng anime character {kind} sheet, consistent character design"
+        )
+        dest.with_suffix(".txt").write_text(caption.strip(), encoding="utf-8")
+        created.append({"key": key, "label": label, "file": dest.name, "kind": kind})
         if on_progress:
             on_progress(i + 1, total)
     profile["status"] = "sheets_ready"
