@@ -19,6 +19,7 @@ from aivp.paths import ProjectPaths
 from aivp.visual.candidates import generate_candidates
 from aivp.visual.curate import curate_candidates
 from aivp.visual.image_backend import get_image_backend
+from aivp.visual.look_lock import clear_look_lock, set_look_lock
 from aivp.visual.lora_train import execute_lora_train, export_train_package, run_lora_train
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import (
@@ -31,7 +32,9 @@ from aivp.visual.sheets import generate_character_sheets
 from aivp.visual.t2i import approve_lora, generate_with_character, reject_lora
 from aivp.visual.trainset_check import check_trainset
 
-_VISUAL_FOLDERS = frozenset({"candidates", "curated", "generations", "lora", "sheets"})
+_VISUAL_FOLDERS = frozenset(
+    {"candidates", "curated", "generations", "lora", "sheets", "look_lock"}
+)
 
 router = APIRouter(tags=["visual"])
 
@@ -88,6 +91,12 @@ class T2IBody(BaseModel):
 
 class ProbeRejectBody(BaseModel):
     note: str = ""
+
+
+class LookLockBody(BaseModel):
+    folder: str
+    filename: str
+    denoise: float = 0.48
 
 
 class SheetsBody(BaseModel):
@@ -521,6 +530,45 @@ def start_sheets(
     return job
 
 
+@router.put("/projects/{project_id}/visual/characters/{character_id}/look-lock")
+def put_look_lock(
+    project_id: str,
+    character_id: str,
+    body: LookLockBody,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    try:
+        return set_look_lock(
+            vpaths,
+            character_id,
+            folder=body.folder,
+            filename=body.filename,
+            denoise=body.denoise,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.delete("/projects/{project_id}/visual/characters/{character_id}/look-lock")
+def delete_look_lock(
+    project_id: str,
+    character_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    try:
+        return clear_look_lock(vpaths, character_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 @router.get("/projects/{project_id}/visual/characters/{character_id}/files/{folder}/{filename}")
 def get_visual_file(
     project_id: str,
@@ -564,5 +612,16 @@ def delete_visual_file(
     for side in (path.with_suffix(".json"), path.with_suffix(".txt"), path.with_suffix(".meta.json")):
         if side.exists():
             side.unlink()
-    # Also drop sidecar named like file.png.meta.json handled above; cand captions use .txt
+    # Clear look-lock pointer if the source image was deleted (ref copy remains until cleared).
+    profile_path = vpaths.profile_json(character_id)
+    if profile_path.exists():
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        lock = profile.get("look_lock") if isinstance(profile.get("look_lock"), dict) else None
+        if lock and lock.get("folder") == folder and lock.get("file") == filename:
+            # Keep ref.png; only mark source missing in metadata.
+            lock["source_missing"] = True
+            profile["look_lock"] = lock
+            profile_path.write_text(
+                json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
     return {"deleted": True, "folder": folder, "filename": filename}

@@ -30,6 +30,8 @@ class ImageBackend(Protocol):
         height: int = 1024,
         lora_name: str | None = None,
         lora_strength: float = 0.75,
+        ref_image: Path | None = None,
+        denoise: float = 1.0,
     ) -> Path: ...
 
     def healthy(self) -> bool: ...
@@ -52,6 +54,8 @@ class StubImageBackend:
         height: int = 1024,
         lora_name: str | None = None,
         lora_strength: float = 0.75,
+        ref_image: Path | None = None,
+        denoise: float = 1.0,
     ) -> Path:
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -61,11 +65,19 @@ class StubImageBackend:
 
         w = max(64, int(width))
         h = max(64, int(height))
-        img = Image.new("RGB", (w, h), color=(30 + (seed or 0) % 40, 50, 70))
-        draw = ImageDraw.Draw(img)
+        if ref_image and Path(ref_image).exists() and float(denoise) < 0.999:
+            # Keep identity cue from look-lock while still marking stub output.
+            try:
+                base = Image.open(ref_image).convert("RGB").resize((w, h))
+            except Exception:  # noqa: BLE001
+                base = Image.new("RGB", (w, h), color=(30 + (seed or 0) % 40, 50, 70))
+        else:
+            base = Image.new("RGB", (w, h), color=(30 + (seed or 0) % 40, 50, 70))
+        draw = ImageDraw.Draw(base)
         title = (prompt or "character")[:80]
         draw.rectangle((40, 40, w - 40, 180), outline=(220, 200, 160), width=3)
-        draw.text((56, 60), "AIVP stub sheet", fill=(240, 230, 210))
+        label = "AIVP stub look-lock" if ref_image else "AIVP stub sheet"
+        draw.text((56, 60), label, fill=(240, 230, 210))
         y = 220
         line = ""
         for ch in title:
@@ -76,10 +88,10 @@ class StubImageBackend:
                 line = ""
         if line:
             draw.text((56, y), line, fill=(230, 220, 200))
-        draw.text((56, h - 64), f"seed={seed or 0}", fill=(180, 170, 150))
+        draw.text((56, h - 64), f"seed={seed or 0} denoise={denoise}", fill=(180, 170, 150))
         if lora_name:
             draw.text((56, h - 36), f"lora={lora_name}", fill=(180, 170, 150))
-        img.save(dest, format="PNG")
+        base.save(dest, format="PNG")
         meta = dest.with_suffix(".json")
         meta.write_text(
             json.dumps(
@@ -92,6 +104,8 @@ class StubImageBackend:
                     "height": h,
                     "lora_name": lora_name,
                     "lora_strength": lora_strength,
+                    "ref_image": str(ref_image) if ref_image else None,
+                    "denoise": denoise,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -186,6 +200,105 @@ def build_sdxl_txt2img_workflow(
     return nodes
 
 
+def build_sdxl_img2img_workflow(
+    *,
+    checkpoint: str,
+    prompt: str,
+    negative: str,
+    seed: int,
+    input_image: str,
+    width: int = 768,
+    height: int = 1024,
+    steps: int = 28,
+    cfg: float = 6.5,
+    denoise: float = 0.48,
+    filename_prefix: str = "aivp",
+    lora_name: str | None = None,
+    lora_strength: float = 0.75,
+) -> dict[str, Any]:
+    """ComfyUI API-format SDXL img2img guided by a look-lock reference."""
+    ckpt = (checkpoint or "").strip()
+    if not ckpt:
+        raise RuntimeError("comfy_checkpoint_empty")
+    if not (input_image or "").strip():
+        raise RuntimeError("comfy_img2img_missing_input")
+
+    model_src: list[Any] = ["4", 0]
+    clip_src: list[Any] = ["4", 1]
+    nodes: dict[str, Any] = {
+        "4": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": ckpt},
+        },
+        "11": {
+            "class_type": "LoadImage",
+            "inputs": {"image": input_image},
+        },
+        "12": {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": ["11", 0],
+                "upscale_method": "lanczos",
+                "width": int(width),
+                "height": int(height),
+                "crop": "center",
+            },
+        },
+        "13": {
+            "class_type": "VAEEncode",
+            "inputs": {"pixels": ["12", 0], "vae": ["4", 2]},
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
+        },
+    }
+
+    lora = (lora_name or "").strip()
+    if lora:
+        nodes["10"] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": lora,
+                "strength_model": float(lora_strength),
+                "strength_clip": float(lora_strength),
+                "model": ["4", 0],
+                "clip": ["4", 1],
+            },
+        }
+        model_src = ["10", 0]
+        clip_src = ["10", 1]
+
+    nodes["6"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": prompt, "clip": clip_src},
+    }
+    nodes["7"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": negative, "clip": clip_src},
+    }
+    nodes["3"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": int(seed),
+            "steps": int(steps),
+            "cfg": float(cfg),
+            "sampler_name": "dpmpp_2m_sde",
+            "scheduler": "karras",
+            "denoise": float(max(0.05, min(1.0, denoise))),
+            "model": model_src,
+            "positive": ["6", 0],
+            "negative": ["7", 0],
+            "latent_image": ["13", 0],
+        },
+    }
+    return nodes
+
+
 class ComfyImageBackend:
     def __init__(
         self,
@@ -219,6 +332,8 @@ class ComfyImageBackend:
         height: int = 1024,
         lora_name: str | None = None,
         lora_strength: float = 0.75,
+        ref_image: Path | None = None,
+        denoise: float = 1.0,
     ) -> Path:
         if not self.healthy():
             raise RuntimeError("comfyui_unreachable")
@@ -231,19 +346,38 @@ class ComfyImageBackend:
 
         client_id = uuid.uuid4().hex
         resolved_seed = int(seed) if seed is not None else fresh_seed()
-        workflow = build_sdxl_txt2img_workflow(
-            checkpoint=self.checkpoint,
-            prompt=prompt,
-            negative=negative or "lowres, blurry, bad anatomy, watermark",
-            seed=resolved_seed,
-            width=width,
-            height=height,
-            lora_name=lora_name,
-            lora_strength=lora_strength,
-        )
+        use_img2img = bool(ref_image) and Path(ref_image).exists() and float(denoise) < 0.999
+        uploaded_name: str | None = None
+
         dest.parent.mkdir(parents=True, exist_ok=True)
 
         with httpx.Client(timeout=60.0) as client:
+            if use_img2img:
+                uploaded_name = self._upload_image(client, Path(ref_image))
+                workflow = build_sdxl_img2img_workflow(
+                    checkpoint=self.checkpoint,
+                    prompt=prompt,
+                    negative=negative or "lowres, blurry, bad anatomy, watermark",
+                    seed=resolved_seed,
+                    input_image=uploaded_name,
+                    width=width,
+                    height=height,
+                    denoise=float(denoise),
+                    lora_name=lora_name,
+                    lora_strength=lora_strength,
+                )
+            else:
+                workflow = build_sdxl_txt2img_workflow(
+                    checkpoint=self.checkpoint,
+                    prompt=prompt,
+                    negative=negative or "lowres, blurry, bad anatomy, watermark",
+                    seed=resolved_seed,
+                    width=width,
+                    height=height,
+                    lora_name=lora_name,
+                    lora_strength=lora_strength,
+                )
+
             submitted = client.post(
                 f"{self.base_url}/prompt",
                 json={"prompt": workflow, "client_id": client_id},
@@ -293,12 +427,16 @@ class ComfyImageBackend:
                         "seed": resolved_seed,
                         "checkpoint": self.checkpoint,
                         "backend": "comfy",
+                        "mode": "img2img" if use_img2img else "txt2img",
                         "prompt_id": prompt_id,
                         "comfy_file": meta,
                         "width": width,
                         "height": height,
                         "lora_name": lora_name,
                         "lora_strength": lora_strength,
+                        "ref_image": str(ref_image) if use_img2img else None,
+                        "uploaded_image": uploaded_name,
+                        "denoise": float(denoise) if use_img2img else 1.0,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -306,6 +444,25 @@ class ComfyImageBackend:
                 encoding="utf-8",
             )
         return dest
+
+    def _upload_image(self, client: httpx.Client, path: Path) -> str:
+        """Upload local PNG into Comfy input folder; return LoadImage filename."""
+        data = path.read_bytes()
+        files = {"image": (path.name, data, "image/png")}
+        # overwrite=true keeps name stable across look-lock refreshes when possible
+        resp = client.post(
+            f"{self.base_url}/upload/image",
+            files=files,
+            data={"overwrite": "true"},
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"comfy_upload_failed:{resp.status_code}:{resp.text[:300]}")
+        body = resp.json() if resp.content else {}
+        name = body.get("name") if isinstance(body, dict) else None
+        if not name:
+            # Fallback: Comfy often returns the original filename.
+            name = path.name
+        return str(name)
 
 
 def _first_output_images(history_entry: dict[str, Any]) -> list[dict[str, Any]]:

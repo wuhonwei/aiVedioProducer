@@ -116,6 +116,10 @@ def character_status(vpaths: VisualPaths, character_id: str, profile: dict) -> d
     gens = list(vpaths.generations_dir(character_id).glob("*.png"))
     loras = list(vpaths.lora_dir(character_id).glob("*.safetensors"))
     lora_ready = bool(profile.get("lora_ready"))
+    look_lock = profile.get("look_lock") if isinstance(profile.get("look_lock"), dict) else None
+    look_lock_ready = bool(
+        look_lock and (vpaths.character_dir(character_id) / "look_lock" / "ref.png").exists()
+    )
     return {
         **profile,
         "candidate_count": len(cand),
@@ -125,6 +129,8 @@ def character_status(vpaths: VisualPaths, character_id: str, profile: dict) -> d
         "train_status": profile.get("train_status") or "not_started",
         "probe_status": profile.get("probe_status") or "not_started",
         "lora_ready": lora_ready,
+        "look_lock": look_lock,
+        "look_lock_ready": look_lock_ready,
         "lora_files": [p.name for p in loras],
         "candidates": sorted(p.name for p in cand),
         "curated": sorted(p.name for p in curated),

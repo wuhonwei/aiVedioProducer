@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   approveVisualLora,
   checkVisualTrainset,
+  clearVisualLookLock,
   curateVisualCharacter,
   deleteVisualFile,
   getVisualJob,
@@ -9,6 +10,7 @@ import {
   packageVisualLora,
   probeVisualLora,
   rejectVisualLora,
+  setVisualLookLock,
   startVisualCandidates,
   startVisualLoraTrain,
   startVisualSheets,
@@ -362,6 +364,45 @@ export function VisualPage({ projectId }: Props) {
     }
   };
 
+  const onSetLookLock = async (folder: string, filename: string) => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await setVisualLookLock(projectId, active.character_id, {
+        folder,
+        filename,
+        denoise: 0.48,
+      });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onClearLookLock = async () => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await clearVisualLookLock(projectId, active.character_id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isLookLockSource = (folder: string, name: string) =>
+    Boolean(
+      active?.look_lock &&
+        active.look_lock.folder === folder &&
+        active.look_lock.file === name,
+    );
+
   const renderThumb = (
     folder: "candidates" | "sheets" | "generations",
     name: string,
@@ -370,10 +411,14 @@ export function VisualPage({ projectId }: Props) {
   ) => {
     if (!active) return null;
     const src = visualFileUrl(projectId, active.character_id, folder, name);
+    const locked = isLookLockSource(folder, name);
     return (
       <div key={`${folder}-${name}`} className="bible-card" style={{ position: "relative" }}>
         <div className="row" style={{ marginBottom: 8, justifyContent: "space-between" }}>
-          <span>{title}</span>
+          <span>
+            {title}
+            {locked ? " · 定妆" : ""}
+          </span>
           <button
             type="button"
             className="btn btn-secondary"
@@ -385,6 +430,16 @@ export function VisualPage({ projectId }: Props) {
           </button>
         </div>
         {extra}
+        <div className="row" style={{ marginBottom: 8 }}>
+          <button
+            type="button"
+            className={locked ? "btn btn-primary" : "btn btn-secondary"}
+            disabled={busy}
+            onClick={() => void onSetLookLock(folder, name)}
+          >
+            {locked ? "当前定妆" : "设为定妆"}
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => setLightbox({ src, title })}
@@ -392,9 +447,10 @@ export function VisualPage({ projectId }: Props) {
             display: "block",
             width: "100%",
             padding: 0,
-            border: "none",
+            border: locked ? "2px solid var(--accent)" : "none",
             background: "transparent",
             cursor: "zoom-in",
+            borderRadius: 8,
           }}
           aria-label={`放大 ${title}`}
         >
@@ -533,6 +589,40 @@ export function VisualPage({ projectId }: Props) {
               )}
 
               <h4 style={{ marginBottom: 0 }}>候选图</h4>
+              {active.look_lock_ready && (
+                <div className="bible-card" aria-label="look-lock-panel">
+                  <p className="note" style={{ marginBottom: 8 }}>
+                    定妆已锁定：后续候选将用 img2img 参考此图（denoise{" "}
+                    {Number(active.look_lock?.denoise ?? 0.48).toFixed(2)}）
+                  </p>
+                  <div className="row" style={{ alignItems: "center", gap: 12 }}>
+                    <img
+                      src={visualFileUrl(
+                        projectId,
+                        active.character_id,
+                        "look_lock",
+                        active.look_lock?.ref_file || "ref.png",
+                      )}
+                      alt="look-lock"
+                      className="visual-thumb-img"
+                      style={{ width: 96, height: 128 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={busy}
+                      onClick={() => void onClearLookLock()}
+                    >
+                      清除定妆
+                    </button>
+                  </div>
+                </div>
+              )}
+              {!active.look_lock_ready && (
+                <p className="note">
+                  提示：先生成并挑选一张满意图，点「设为定妆」，再批量生成候选，性别/着装会稳定很多。
+                </p>
+              )}
               <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                 <button
                   type="button"

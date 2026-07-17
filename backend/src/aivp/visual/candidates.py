@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from aivp.visual.image_backend import ImageBackend, fresh_seed
+from aivp.visual.look_lock import resolve_look_lock
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters
 from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
@@ -46,6 +47,7 @@ def generate_candidates_for_character(
     # No hard cap on how many times the user may generate; soft ceiling avoids runaway jobs.
     n = max(1, min(int(count), 100))
     neg = negative or candidate_negative_for(profile)
+    ref_image, denoise = resolve_look_lock(vpaths, cid, profile)
     batch = _unique_stem("cand")
     # New base each batch so Comfy does not replay the same 8 seeds forever.
     seed_base = fresh_seed()
@@ -56,6 +58,11 @@ def generate_candidates_for_character(
             break
         view = VIEW_PROMPTS[i % len(VIEW_PROMPTS)]
         prompt = build_candidate_prompt(profile, view)
+        if ref_image:
+            prompt = (
+                f"{prompt}, keep same character identity and outfit as reference, "
+                "consistent face and wardrobe"
+            )
         name = f"{batch}_{i+1:03d}.png"
         dest = out_dir / name
         backend.generate(
@@ -65,6 +72,8 @@ def generate_candidates_for_character(
             seed=(seed_base + i) % (2_147_483_647 + 1),
             width=768,
             height=1024,
+            ref_image=ref_image,
+            denoise=denoise if ref_image else 1.0,
         )
         dest.with_suffix(".txt").write_text(prompt, encoding="utf-8")
         created.append(dest.name)
@@ -72,10 +81,18 @@ def generate_candidates_for_character(
             on_progress(len(created), n)
     profile["status"] = "candidates_ready"
     profile["candidates_generated_at"] = datetime.now(timezone.utc).isoformat()
+    if ref_image:
+        profile["candidates_used_look_lock"] = True
     vpaths.profile_json(cid).write_text(
         json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    return {"character_id": cid, "files": created, "trigger": profile["trigger"]}
+    return {
+        "character_id": cid,
+        "files": created,
+        "trigger": profile["trigger"],
+        "look_lock": bool(ref_image),
+        "denoise": denoise if ref_image else 1.0,
+    }
 
 
 def generate_candidates(

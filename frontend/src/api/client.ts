@@ -303,6 +303,13 @@ export type VisualCharacter = {
   lora_ready: boolean;
   train_status?: string;
   probe_status?: string;
+  look_lock?: {
+    folder?: string;
+    file?: string;
+    ref_file?: string;
+    denoise?: number;
+  } | null;
+  look_lock_ready?: boolean;
   candidates: string[];
   curated: string[];
   sheets?: string[];
@@ -326,6 +333,26 @@ export const startVisualCandidates = (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
   });
+
+export const setVisualLookLock = (
+  projectId: string,
+  characterId: string,
+  body: { folder: string; filename: string; denoise?: number },
+) =>
+  req<{ look_lock: Record<string, unknown> }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/look-lock`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+
+export const clearVisualLookLock = (projectId: string, characterId: string) =>
+  req<{ look_lock: null }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/look-lock`,
+    { method: "DELETE" },
+  );
 
 export const startVisualSheets = (
   projectId: string,
