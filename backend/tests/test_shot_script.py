@@ -43,6 +43,8 @@ def test_expand_events_produces_shots_with_fake_llm():
     assert shots[0]["shot_id"].startswith("EP001_")
     assert shots[0]["assets_required"]["characters"]
     assert shots[0]["review"]["status"] == "needs_review"
+    assert shots[0]["review_status"] == "needs_review"
+    assert shots[0]["source_refs"]
     assert shots[0]["visual_prompt"]
 
 
@@ -58,4 +60,6 @@ def test_run_shot_script_writes_file(tmp_path: Path):
     llm = FakeLlm(default={"shots": []})
     doc = run_shot_script(paths, settings, llm, force=True)
     assert paths.shot_script_json.exists()
+    assert paths.shot_script_index_json.exists()
     assert doc["shot_count"] >= 1
+    assert paths.asset_plan_json.exists()

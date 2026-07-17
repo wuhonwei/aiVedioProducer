@@ -203,12 +203,20 @@ export const healthDeepseek = () => req<DeepseekHealth>("/api/health/deepseek");
 
 export const getShots = (
   projectId: string,
-  options?: { offset?: number; limit?: number; eventId?: string },
+  options?: {
+    offset?: number;
+    limit?: number;
+    eventId?: string;
+    chapterId?: string;
+    reviewStatus?: string;
+  },
 ) => {
   const params = new URLSearchParams();
   if (options?.offset != null) params.set("offset", String(options.offset));
   if (options?.limit != null) params.set("limit", String(options.limit));
   if (options?.eventId) params.set("event_id", options.eventId);
+  if (options?.chapterId) params.set("chapter_id", options.chapterId);
+  if (options?.reviewStatus) params.set("review_status", options.reviewStatus);
   const q = params.toString() ? `?${params}` : "";
   return req<{
     shots?: Array<Record<string, unknown>>;
@@ -246,22 +254,42 @@ export const reviewShot = (
     body: JSON.stringify(body),
   });
 
-export const exportShotsYaml = (projectId: string) =>
-  req<{ count: number; root: string }>(`/api/projects/${projectId}/shots/export-yaml`, {
-    method: "POST",
-  });
+export const exportShotsYaml = (projectId: string, approvedOnly = false) =>
+  req<{ count: number; root: string; approved_only?: boolean }>(
+    `/api/projects/${projectId}/shots/export-yaml?approved_only=${approvedOnly}`,
+    {
+      method: "POST",
+    },
+  );
 
 export const getAssetPlan = (projectId: string) =>
   req<{
+    schema_version?: number;
+    generated_from?: Record<string, unknown>;
     characters?: Array<Record<string, unknown>>;
     locations?: Array<Record<string, unknown>>;
     props?: Array<Record<string, unknown>>;
   }>(`/api/projects/${projectId}/assets/plan`);
 
-export const regenerateAssetPlan = (projectId: string, approvedOnly = false) =>
+export const regenerateAssetPlan = (projectId: string, approvedOnly = true) =>
   req<Record<string, unknown>>(
     `/api/projects/${projectId}/assets/plan/regenerate?approved_only=${approvedOnly}`,
     { method: "POST" },
+  );
+
+export const patchAssetPlanEntry = (
+  projectId: string,
+  assetType: string,
+  assetId: string,
+  patch: Record<string, unknown>,
+) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/assets/plan/${assetType}/${encodeURIComponent(assetId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
   );
 
 export type VisualCharacter = {

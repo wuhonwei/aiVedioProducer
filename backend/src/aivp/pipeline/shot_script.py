@@ -8,9 +8,11 @@ from typing import Any
 from aivp.jobs.control import JobCancelled
 from aivp.pipeline.shot_upgrade import (
     build_asset_plan,
+    build_name_to_id_map,
     save_asset_plan,
     upgrade_shot_document,
     upgrade_shot_to_v2,
+    write_shot_script_index,
     write_shot_yamls,
 )
 SHOT_SYSTEM = (
@@ -75,6 +77,7 @@ def heuristic_shots_for_event(event: dict, assets_by_name: dict[str, dict]) -> l
     establishing = {
         "event_id": event_id,
         "chapter_id": chapter_id,
+        "chunk_id": _text(event.get("chunk_id")),
         "order": 1,
         "shot_type": "establishing" if location_name else "wide",
         "camera": camera,
@@ -85,6 +88,16 @@ def heuristic_shots_for_event(event: dict, assets_by_name: dict[str, dict]) -> l
         "audio_notes": _text(event.get("emotion")) or "环境声",
         "cast": cast_names,
         "location_name": location_name,
+        "source_refs": [
+            {
+                "chapter_id": chapter_id,
+                "chunk_id": _text(event.get("chunk_id")),
+                "event_id": event_id,
+                "evidence": _text(event.get("evidence") or summary),
+            }
+        ],
+        "importance": event.get("importance"),
+        "visual_score": event.get("visual_score"),
     }
     close = dict(establishing)
     close.update(
@@ -115,6 +128,7 @@ def coerce_shot(raw: Any, event: dict, order_fallback: int) -> dict | None:
         "shot_id": _text(raw.get("shot_id")) or f"sh_{event_id}_{order:02d}",
         "event_id": event_id,
         "chapter_id": _text(raw.get("chapter_id") or event.get("chapter_id")),
+        "chunk_id": _text(raw.get("chunk_id") or event.get("chunk_id")),
         "order": order,
         "shot_type": _text(raw.get("shot_type")) or "medium",
         "camera": raw.get("camera") if isinstance(raw.get("camera"), dict) else (
@@ -127,6 +141,17 @@ def coerce_shot(raw: Any, event: dict, order_fallback: int) -> dict | None:
         "audio_notes": _text(raw.get("audio_notes") or event.get("emotion")),
         "cast": cast_names,
         "location_name": _text(raw.get("location_name")),
+        "props": raw.get("props") if isinstance(raw.get("props"), list) else [],
+        "source_refs": [
+            {
+                "chapter_id": _text(raw.get("chapter_id") or event.get("chapter_id")),
+                "chunk_id": _text(raw.get("chunk_id") or event.get("chunk_id")),
+                "event_id": event_id,
+                "evidence": _text(event.get("evidence") or event.get("summary") or action),
+            }
+        ],
+        "importance": event.get("importance"),
+        "visual_score": event.get("visual_score"),
     }
     return upgrade_shot_to_v2(base, order)
 
@@ -231,13 +256,14 @@ def expand_events_with_llm(
             on_progress(done, total)
 
     # Stable shot_id rewrite + v2 upgrade
+    name_map = build_name_to_id_map(assets)
     upgraded: list[dict] = []
     for i, shot in enumerate(shots, start=1):
         eid = shot.get("event_id") or "evt"
         order = int(shot.get("order") or 1)
         shot["shot_id"] = f"sh_{eid}_{order:02d}"
         shot["global_order"] = i
-        upgraded.append(upgrade_shot_to_v2(shot, i))
+        upgraded.append(upgrade_shot_to_v2(shot, i, name_to_id=name_map))
     return upgraded, warnings
 
 
@@ -404,23 +430,12 @@ def run_shot_script(
         "warnings": warnings,
         "volumes": volume_entries,
     }
-    doc = upgrade_shot_document(doc)
+    doc = upgrade_shot_document(doc, name_to_id=build_name_to_id_map(assets))
     paths.shot_script_dir.mkdir(parents=True, exist_ok=True)
     paths.shot_script_json.write_text(
         json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    if volume_entries:
-        index = {
-            "schema_version": 2,
-            "generated_at": doc["generated_at"],
-            "event_count": doc["event_count"],
-            "shot_count": doc["shot_count"],
-            "volumes": volume_entries,
-            "warnings": warnings,
-        }
-        paths.shot_script_index_json.write_text(
-            json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+    write_shot_script_index(paths.shot_script_index_json, doc)
     try:
         write_shot_yamls(paths.shots_dir, doc["shots"])
     except RuntimeError:
@@ -429,7 +444,13 @@ def run_shot_script(
         paths.shot_script_json.write_text(
             json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-    plan = build_asset_plan(doc["shots"], approved_only=False)
+    # Draft plan from all shots at generation time; regenerate later with approved_only.
+    entities = None
+    if paths.entities_json.exists():
+        entities = json.loads(paths.entities_json.read_text(encoding="utf-8"))
+    plan = build_asset_plan(
+        doc["shots"], approved_only=False, entities=entities, assets=assets
+    )
     save_asset_plan(paths.asset_plan_json, plan)
     doc["asset_plan_path"] = str(paths.asset_plan_json)
     return doc

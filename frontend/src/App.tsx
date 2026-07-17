@@ -5,15 +5,25 @@ import { BiblePage } from "./pages/BiblePage";
 import { ExportPage } from "./pages/ExportPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ShotsPage } from "./pages/ShotsPage";
+import { AssetPlanPage } from "./pages/AssetPlanPage";
 import { VisualPage } from "./pages/VisualPage";
 
-type Page = "list" | "pipeline" | "bible" | "shots" | "visual" | "export" | "settings";
+type Page =
+  | "list"
+  | "pipeline"
+  | "bible"
+  | "shots"
+  | "assets"
+  | "visual"
+  | "export"
+  | "settings";
 
 const NAV: { id: Page; label: string; needsProject?: boolean }[] = [
   { id: "list", label: "项目" },
   { id: "pipeline", label: "流水线", needsProject: true },
   { id: "bible", label: "Story Bible", needsProject: true },
   { id: "shots", label: "分镜", needsProject: true },
+  { id: "assets", label: "资产计划", needsProject: true },
   { id: "visual", label: "角色视觉", needsProject: true },
   { id: "export", label: "导出", needsProject: true },
   { id: "settings", label: "设置" },
@@ -85,13 +95,19 @@ export default function App() {
       )}
       {page === "pipeline" && projectId && <PipelinePage projectId={projectId} />}
       {page === "bible" && projectId && <BiblePage projectId={projectId} />}
-      {page === "shots" && projectId && <ShotsPage projectId={projectId} />}
+      {page === "shots" && projectId && (
+        <ShotsPage projectId={projectId} onOpenAssets={() => go("assets")} />
+      )}
+      {page === "assets" && projectId && (
+        <AssetPlanPage projectId={projectId} onOpenShot={() => go("shots")} />
+      )}
       {page === "visual" && projectId && <VisualPage projectId={projectId} />}
       {page === "export" && projectId && <ExportPage projectId={projectId} />}
       {page === "settings" && <SettingsPage />}
       {(page === "pipeline" ||
         page === "bible" ||
         page === "shots" ||
+        page === "assets" ||
         page === "visual" ||
         page === "export") &&
         !projectId && (
