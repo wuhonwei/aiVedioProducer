@@ -59,7 +59,7 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${page === "visual" ? " app-shell--wide" : ""}`}>
       <header className="app-header">
         <div className="brand-block">
           <h1>AIVP Story Bible</h1>

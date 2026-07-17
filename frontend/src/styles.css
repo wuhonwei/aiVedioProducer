@@ -56,6 +56,10 @@ a {
   padding: 28px 20px 48px;
 }
 
+.app-shell--wide {
+  max-width: min(1680px, 98vw);
+}
+
 .app-header {
   display: flex;
   flex-wrap: wrap;
@@ -358,6 +362,45 @@ input[type="file"] {
   gap: 12px;
 }
 
+/* Visual page: ~4 thumbs across so each is ~1/4 prior full-width size */
+.visual-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.visual-thumbs .bible-card {
+  padding: 8px 10px;
+}
+
+.visual-thumbs .bible-card .row {
+  margin-bottom: 6px;
+  gap: 6px;
+}
+
+.visual-thumbs .bible-card .btn {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+}
+
+.visual-thumb-img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+  background: #ebe6dc;
+}
+
+.visual-probe-preview {
+  max-width: 180px;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  display: block;
+}
+
 .bible-card {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -445,6 +488,10 @@ input[type="file"] {
 @media (max-width: 800px) {
   .bible-layout {
     grid-template-columns: 1fr;
+  }
+
+  .visual-thumbs {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   }
 
   .app-header {

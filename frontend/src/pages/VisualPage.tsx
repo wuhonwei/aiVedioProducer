@@ -370,7 +370,7 @@ export function VisualPage({ projectId }: Props) {
           <img
             src={src}
             alt={title}
-            style={{ width: "100%", borderRadius: 8, display: "block" }}
+            className="visual-thumb-img"
           />
         </button>
       </div>
@@ -515,7 +515,7 @@ export function VisualPage({ projectId }: Props) {
                   批量生成候选（8）
                 </button>
               </div>
-              <div className="bible-cards" aria-label="candidate-grid">
+              <div className="bible-cards visual-thumbs" aria-label="candidate-grid">
                 {active.candidates.map((name) =>
                   renderThumb(
                     "candidates",
@@ -617,7 +617,7 @@ export function VisualPage({ projectId }: Props) {
               <p className="note">
                 单次/批量生成的图会出现在下方；勾选后点「确认训练集」写入 curated。
               </p>
-              <div className="bible-cards" aria-label="sheet-grid">
+              <div className="bible-cards visual-thumbs" aria-label="sheet-grid">
                 {(active.sheets || []).map((name) =>
                   renderThumb(
                     "sheets",
@@ -733,12 +733,7 @@ export function VisualPage({ projectId }: Props) {
                       <img
                         src={probeResult}
                         alt="probe"
-                        style={{
-                          maxWidth: 360,
-                          borderRadius: 12,
-                          border: "1px solid var(--line)",
-                          display: "block",
-                        }}
+                        className="visual-probe-preview"
                       />
                     </button>
                   </div>
@@ -748,7 +743,7 @@ export function VisualPage({ projectId }: Props) {
               {(active.generations || []).length > 0 && (
                 <>
                   <h4 style={{ marginBottom: 0 }}>历史试生成</h4>
-                  <div className="bible-cards" aria-label="generations-grid">
+                  <div className="bible-cards visual-thumbs" aria-label="generations-grid">
                     {(active.generations || []).slice(0, 12).map((name) =>
                       renderThumb("generations", name, name),
                     )}
