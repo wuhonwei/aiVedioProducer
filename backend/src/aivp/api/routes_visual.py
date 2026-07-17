@@ -629,3 +629,99 @@ def delete_visual_file(
                 json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
             )
     return {"deleted": True, "folder": folder, "filename": filename}
+
+
+class SelfCheckBody(BaseModel):
+    character_ids: list[str] | None = None
+    candidate_count: int = Field(default=4, ge=1, le=16)
+    max_rounds: int | None = None
+    pass_rate: float | None = None
+    apply_patches: bool = True
+    judge_only: bool = False
+
+
+@router.post("/projects/{project_id}/visual/self-check", status_code=202)
+def start_visual_self_check(
+    project_id: str,
+    request: Request,
+    body: SelfCheckBody | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Generate (optional) + vision-judge images; auto-write qa_tuning until pass rate OK."""
+    _require_project(db, project_id)
+    body = body or SelfCheckBody()
+    vpaths = VisualPaths(settings.data_root, project_id)
+    vpaths.ensure()
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id,
+        "project_id": project_id,
+        "kind": "visual_self_check",
+        "status": "queued",
+        "progress_done": 0,
+        "progress_total": 0,
+        "error": None,
+        "result": None,
+    }
+    path = _job_path(vpaths, job_id)
+    _write_job(path, job)
+
+    def _worker() -> None:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["status"] = "running"
+        _write_job(path, data)
+        try:
+            from aivp.llm.ollama_vision_client import OllamaVisionClient
+            from aivp.visual.self_check import evaluate_character_images, run_self_check_loop
+
+            vision = OllamaVisionClient(settings.ollama_base_url, settings.ollama_vision_model)
+            if not vision.model_available():
+                raise RuntimeError(
+                    f"vision_model_missing:{settings.ollama_vision_model}; "
+                    f"run `ollama pull {settings.ollama_vision_model}`"
+                )
+            threshold = (
+                float(body.pass_rate)
+                if body.pass_rate is not None
+                else float(settings.visual_qa_pass_rate)
+            )
+            if body.judge_only:
+                bible_chars = load_major_characters(vpaths)
+                if body.character_ids:
+                    wanted = set(body.character_ids)
+                    bible_chars = [c for c in bible_chars if str(c.get("id") or "") in wanted]
+                reports = [
+                    evaluate_character_images(vpaths, ch, vision) for ch in bible_chars
+                ]
+                result = {
+                    "mode": "judge_only",
+                    "pass_rate_threshold": threshold,
+                    "reports": reports,
+                }
+            else:
+                backend = get_image_backend(settings)
+                result = run_self_check_loop(
+                    vpaths,
+                    backend,
+                    vision,
+                    character_ids=body.character_ids,
+                    pass_rate_threshold=threshold,
+                    max_rounds=int(body.max_rounds or settings.visual_qa_max_rounds),
+                    candidate_count=body.candidate_count,
+                    apply_patches=body.apply_patches,
+                )
+            data["status"] = "succeeded"
+            data["result"] = result
+            _write_job(path, data)
+        except Exception as e:  # noqa: BLE001
+            data["status"] = "failed"
+            data["error"] = str(e)
+            _write_job(path, data)
+
+    if getattr(request.app.state, "run_jobs_inline", False):
+        _worker()
+    else:
+        threading.Thread(target=_worker, daemon=False, name=f"aivp-selfcheck-{job_id}").start()
+    return job
+

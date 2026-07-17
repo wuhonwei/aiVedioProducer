@@ -16,6 +16,19 @@ def health_ollama(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     return {"ok": client.healthy(), "base_url": settings.ollama_base_url, "model": settings.ollama_model}
 
 
+@router.get("/health/ollama-vision")
+def health_ollama_vision(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    from aivp.llm.ollama_vision_client import OllamaVisionClient
+
+    client = OllamaVisionClient(settings.ollama_base_url, settings.ollama_vision_model)
+    return {
+        "ok": client.healthy(),
+        "model_available": client.model_available(),
+        "base_url": settings.ollama_base_url,
+        "model": settings.ollama_vision_model,
+    }
+
+
 @router.get("/health/comfy")
 def health_comfy(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     from aivp.visual.image_backend import ComfyImageBackend, StubImageBackend

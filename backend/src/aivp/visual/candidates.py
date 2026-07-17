@@ -10,6 +10,7 @@ from aivp.visual.look_lock import candidate_cfg_for, candidate_denoise_for, reso
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters
 from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
+from aivp.visual.qa_tuning import load_qa_tuning
 
 
 VIEW_PROMPTS = [
@@ -74,8 +75,11 @@ def generate_candidates_for_character(
     n = max(1, min(int(count), 100))
     neg = negative or candidate_negative_for(profile)
     ref_image, base_denoise = resolve_look_lock(vpaths, cid, profile)
+    tuning = load_qa_tuning(vpaths)
     if ref_image:
         neg = _look_lock_candidate_negative(neg)
+    if tuning.get("extra_negative"):
+        neg = f"{neg}, {tuning['extra_negative']}"
     batch = _unique_stem("cand")
     # New base each batch so Comfy does not replay the same 8 seeds forever.
     seed_base = fresh_seed()
@@ -94,7 +98,7 @@ def generate_candidates_for_character(
         denoise = 1.0
         cfg = 8.0
         if ref_image:
-            denoise = candidate_denoise_for(view, base_denoise, index=i)
+            denoise = candidate_denoise_for(view, base_denoise, index=i, tuning=tuning)
             used_denoises.append(denoise)
             cfg = candidate_cfg_for()
             prompt = (
@@ -104,6 +108,11 @@ def generate_candidates_for_character(
                 "must change body pose gesture and stance clearly, "
                 "do not redesign wardrobe or facial features, do not keep the reference pose, "
                 "no shirtless no bare chest no revealing clothes"
+            )
+        if tuning.get("outfit_lock_boost"):
+            prompt = (
+                f"{prompt}, fully clothed, covered torso, exact wardrobe colors, "
+                "guofeng cloak or tunic as described, no bare chest"
             )
         name = f"{batch}_{i+1:03d}.png"
         dest = out_dir / name

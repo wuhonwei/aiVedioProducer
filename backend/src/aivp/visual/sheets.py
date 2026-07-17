@@ -22,6 +22,7 @@ from aivp.visual.prompts import (
     build_character_prompt,
     sheet_negative_for,
 )
+from aivp.visual.qa_tuning import load_qa_tuning
 
 ALL_SLOTS: dict[str, tuple[str, str, str]] = {
     key: (key, label, framing)
@@ -92,6 +93,7 @@ def generate_character_sheets(
     lora = _lora_name(profile, vpaths, cid)
     slots = resolve_sheet_slots(group=group, slot_keys=slot_keys)
     ref_image, base_denoise = resolve_look_lock(vpaths, cid, profile)
+    tuning = load_qa_tuning(vpaths)
     created: list[dict[str, str]] = []
     total = len(slots)
     seed_base = fresh_seed()
@@ -129,18 +131,26 @@ def generate_character_sheets(
                 f"{prompt}, same character identity hairstyle and outfit as reference, "
                 "keep full body framing, not a copy of the reference photo"
             )
+        if tuning.get("outfit_lock_boost") and not is_expr:
+            prompt = (
+                f"{prompt}, fully clothed, covered torso, exact wardrobe as described, "
+                "no shirtless no bare chest"
+            )
         dest = out_dir / _unique_sheet_name(key)
-        denoise = sheet_denoise_for(key, base_denoise) if use_ref else 1.0
-        cfg = sheet_cfg_for(key) if use_ref else 8.0
+        denoise = sheet_denoise_for(key, base_denoise, tuning=tuning) if use_ref else 1.0
+        cfg = sheet_cfg_for(key, tuning=tuning) if use_ref else 8.0
         # Square canvas for face headshots; portrait for full-body turnaround.
         width, height = (768, 768) if is_expr else (768, 1024)
+        neg = sheet_negative_for(
+            str(profile.get("gender_presentation") or ""),
+            slot_key=key,
+            text_hints=f"{look} {profile.get('name') or ''}",
+        )
+        if tuning.get("extra_negative"):
+            neg = f"{neg}, {tuning['extra_negative']}"
         backend.generate(
             prompt=prompt,
-            negative=sheet_negative_for(
-                str(profile.get("gender_presentation") or ""),
-                slot_key=key,
-                text_hints=f"{look} {profile.get('name') or ''}",
-            ),
+            negative=neg,
             dest=dest,
             seed=(seed_base + i) % (2_147_483_647 + 1),
             width=width,

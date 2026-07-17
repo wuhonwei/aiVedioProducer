@@ -45,3 +45,6 @@ class Settings(BaseSettings):
     comfy_checkpoint: str = ""
     lora_train_cmd: str = ""
     visual_candidate_count: int = 8
+    ollama_vision_model: str = "qwen2.5vl:7b"
+    visual_qa_pass_rate: float = 0.60
+    visual_qa_max_rounds: int = 3

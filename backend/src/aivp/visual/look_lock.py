@@ -18,8 +18,17 @@ def clamp_denoise(value: float, *, lo: float = 0.40, hi: float = 0.96) -> float:
     return max(lo, min(hi, float(value)))
 
 
-def candidate_denoise_for(view: str, base: float, *, index: int = 0) -> float:
+def candidate_denoise_for(
+    view: str,
+    base: float,
+    *,
+    index: int = 0,
+    tuning: dict | None = None,
+) -> float:
     """Balance pose change vs outfit lock; too-high denoise rewrites clothes."""
+    tun = tuning or {}
+    lo = float(tun.get("candidate_denoise_lo") or 0.60)
+    hi = float(tun.get("candidate_denoise_hi") or 0.78)
     v = (view or "").lower()
     boost = 0.12
     if any(
@@ -40,27 +49,28 @@ def candidate_denoise_for(view: str, base: float, *, index: int = 0) -> float:
     elif any(k in v for k in ("hip", "clasp", "greeting")):
         boost = 0.15
     jitter = ((index % 5) - 2) * 0.015
-    return clamp_denoise(base + boost + jitter, lo=0.60, hi=0.78)
+    return clamp_denoise(base + boost + jitter, lo=lo, hi=hi)
 
 
-def sheet_denoise_for(slot_key: str, base: float) -> float:
+def sheet_denoise_for(slot_key: str, base: float, *, tuning: dict | None = None) -> float:
     """Per-slot denoise: side/back need near-txt2img to leave front composition."""
+    tun = tuning or {}
     key = (slot_key or "").lower()
     if key == "turnaround_back":
-        return clamp_denoise(0.93, lo=0.88, hi=0.96)
+        return clamp_denoise(float(tun.get("back_denoise") or 0.93), lo=0.88, hi=0.96)
     if key == "turnaround_side":
-        return clamp_denoise(0.90, lo=0.88, hi=0.96)
+        return clamp_denoise(float(tun.get("side_denoise") or 0.90), lo=0.88, hi=0.96)
     if key.startswith("expr_"):
-        # Face crop already; keep moderate denoise for expression only.
-        return clamp_denoise(base + 0.05, lo=0.45, hi=0.68)
+        return clamp_denoise(float(tun.get("expr_denoise") or (base + 0.05)), lo=0.45, hi=0.68)
     return clamp_denoise(base, lo=0.40, hi=0.75)
 
 
-def sheet_cfg_for(slot_key: str) -> float:
+def sheet_cfg_for(slot_key: str, *, tuning: dict | None = None) -> float:
     """Higher CFG so view/expression prompts beat look-lock latent."""
+    tun = tuning or {}
     key = (slot_key or "").lower()
     if key in {"turnaround_side", "turnaround_back"}:
-        return 9.5
+        return float(tun.get("side_back_cfg") or 9.5)
     if key.startswith("expr_"):
         return 8.0
     return 7.0
