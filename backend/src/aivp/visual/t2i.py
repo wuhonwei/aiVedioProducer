@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aivp.visual.image_backend import ImageBackend
+from aivp.visual.image_backend import ImageBackend, fresh_seed
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import DEFAULT_LORA_WEIGHT, save_profile
 from aivp.visual.prompts import character_negative_for
@@ -81,7 +81,7 @@ def generate_with_character(
         prompt=full_prompt,
         negative=neg,
         dest=dest,
-        seed=42,
+        seed=fresh_seed(),
         width=768,
         height=1024,
         lora_name=lora,

@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
+
+# Comfy/SD seeds are usually 32-bit unsigned; keep positive int32 for API safety.
+_SEED_MAX = 2_147_483_647
+
+
+def fresh_seed() -> int:
+    """New random seed per generate call / batch base (avoid fixed 1000+i lock-in)."""
+    return random.randint(0, _SEED_MAX)
 
 
 class ImageBackend(Protocol):
@@ -221,11 +230,12 @@ class ComfyImageBackend:
             )
 
         client_id = uuid.uuid4().hex
+        resolved_seed = int(seed) if seed is not None else fresh_seed()
         workflow = build_sdxl_txt2img_workflow(
             checkpoint=self.checkpoint,
             prompt=prompt,
             negative=negative or "lowres, blurry, bad anatomy, watermark",
-            seed=int(seed if seed is not None else 0),
+            seed=resolved_seed,
             width=width,
             height=height,
             lora_name=lora_name,
@@ -280,7 +290,7 @@ class ComfyImageBackend:
                     {
                         "prompt": prompt,
                         "negative": negative,
-                        "seed": seed,
+                        "seed": resolved_seed,
                         "checkpoint": self.checkpoint,
                         "backend": "comfy",
                         "prompt_id": prompt_id,

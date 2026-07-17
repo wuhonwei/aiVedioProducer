@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aivp.visual.image_backend import ImageBackend
+from aivp.visual.image_backend import ImageBackend, fresh_seed
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile
 from aivp.visual.prompts import (
@@ -86,6 +86,7 @@ def generate_character_sheets(
     slots = resolve_sheet_slots(group=group, slot_keys=slot_keys)
     created: list[dict[str, str]] = []
     total = len(slots)
+    seed_base = fresh_seed()
     for i, (key, label, framing) in enumerate(slots):
         if should_cancel and should_cancel():
             break
@@ -95,7 +96,7 @@ def generate_character_sheets(
             prompt=prompt,
             negative=sheet_negative_for(str(profile.get("gender_presentation") or "")),
             dest=dest,
-            seed=2000 + i,
+            seed=(seed_base + i) % (2_147_483_647 + 1),
             width=768,
             height=1024,
             lora_name=lora,

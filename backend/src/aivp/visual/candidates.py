@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from aivp.visual.image_backend import ImageBackend
+from aivp.visual.image_backend import ImageBackend, fresh_seed
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters
 from aivp.visual.prompts import character_negative_for
@@ -65,6 +65,8 @@ def generate_candidates_for_character(
     n = max(1, min(int(count), 100))
     neg = negative or character_negative_for(str(profile.get("gender_presentation") or ""))
     batch = _unique_stem("cand")
+    # New base each batch so Comfy does not replay the same 8 seeds forever.
+    seed_base = fresh_seed()
     for i in range(n):
         if should_cancel and should_cancel():
             break
@@ -76,7 +78,7 @@ def generate_candidates_for_character(
             prompt=prompt,
             negative=neg,
             dest=dest,
-            seed=1000 + i,
+            seed=(seed_base + i) % (2_147_483_647 + 1),
             width=768,
             height=1024,
         )
