@@ -22,7 +22,7 @@ def test_img2img_workflow_uses_load_image_and_denoise():
         input_image="ref.png",
         denoise=0.48,
     )
-    assert wf["11"]["class_type"] == "LoadImage"
+    assert wf["11"]["class_type"] == "AIVPLoadImage"
     assert wf["11"]["inputs"]["image"] == "ref.png"
     assert wf["13"]["class_type"] == "VAEEncode"
     assert wf["3"]["inputs"]["denoise"] == 0.48

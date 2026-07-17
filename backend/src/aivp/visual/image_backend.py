@@ -215,6 +215,7 @@ def build_sdxl_img2img_workflow(
     filename_prefix: str = "aivp",
     lora_name: str | None = None,
     lora_strength: float = 0.75,
+    load_image_node: str = "AIVPLoadImage",
 ) -> dict[str, Any]:
     """ComfyUI API-format SDXL img2img guided by a look-lock reference."""
     ckpt = (checkpoint or "").strip()
@@ -225,13 +226,14 @@ def build_sdxl_img2img_workflow(
 
     model_src: list[Any] = ["4", 0]
     clip_src: list[Any] = ["4", 1]
+    load_cls = (load_image_node or "AIVPLoadImage").strip() or "AIVPLoadImage"
     nodes: dict[str, Any] = {
         "4": {
             "class_type": "CheckpointLoaderSimple",
             "inputs": {"ckpt_name": ckpt},
         },
         "11": {
-            "class_type": "LoadImage",
+            "class_type": load_cls,
             "inputs": {"image": input_image},
         },
         "12": {
@@ -365,6 +367,7 @@ class ComfyImageBackend:
                     denoise=float(denoise),
                     lora_name=lora_name,
                     lora_strength=lora_strength,
+                    load_image_node="AIVPLoadImage",
                 )
             else:
                 workflow = build_sdxl_txt2img_workflow(
@@ -382,6 +385,29 @@ class ComfyImageBackend:
                 f"{self.base_url}/prompt",
                 json={"prompt": workflow, "client_id": client_id},
             )
+            # If custom node not loaded yet, fall back to stock LoadImage (patched for PNG).
+            if (
+                use_img2img
+                and submitted.status_code >= 400
+                and "AIVPLoadImage" in (submitted.text or "")
+            ):
+                workflow = build_sdxl_img2img_workflow(
+                    checkpoint=self.checkpoint,
+                    prompt=prompt,
+                    negative=negative or "lowres, blurry, bad anatomy, watermark",
+                    seed=resolved_seed,
+                    input_image=uploaded_name or "",
+                    width=width,
+                    height=height,
+                    denoise=float(denoise),
+                    lora_name=lora_name,
+                    lora_strength=lora_strength,
+                    load_image_node="LoadImage",
+                )
+                submitted = client.post(
+                    f"{self.base_url}/prompt",
+                    json={"prompt": workflow, "client_id": client_id},
+                )
             if submitted.status_code >= 400:
                 detail = submitted.text[:500]
                 raise RuntimeError(f"comfy_prompt_rejected:{submitted.status_code}:{detail}")
@@ -447,9 +473,13 @@ class ComfyImageBackend:
 
     def _upload_image(self, client: httpx.Client, path: Path) -> str:
         """Upload local PNG into Comfy input folder; return LoadImage filename."""
-        data = path.read_bytes()
-        files = {"image": (path.name, data, "image/png")}
-        # overwrite=true keeps name stable across look-lock refreshes when possible
+        # Stable unique name so Comfy input/ does not keep a stale/corrupt ref.png.
+        digest = path.read_bytes()
+        import hashlib
+
+        short = hashlib.sha1(digest).hexdigest()[:10]
+        upload_name = f"aivp_looklock_{short}.png"
+        files = {"image": (upload_name, digest, "image/png")}
         resp = client.post(
             f"{self.base_url}/upload/image",
             files=files,
@@ -459,10 +489,7 @@ class ComfyImageBackend:
             raise RuntimeError(f"comfy_upload_failed:{resp.status_code}:{resp.text[:300]}")
         body = resp.json() if resp.content else {}
         name = body.get("name") if isinstance(body, dict) else None
-        if not name:
-            # Fallback: Comfy often returns the original filename.
-            name = path.name
-        return str(name)
+        return str(name or upload_name)
 
 
 def _first_output_images(history_entry: dict[str, Any]) -> list[dict[str, Any]]:
