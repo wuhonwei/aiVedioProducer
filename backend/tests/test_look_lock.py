@@ -52,11 +52,11 @@ def test_set_look_lock_and_candidates_use_ref(tmp_path: Path):
 
     again = generate_candidates_for_character(vpaths, character, backend, count=2)
     assert again["look_lock"] is True
-    assert 0.70 <= float(again["denoise"]) <= 0.88
+    assert 0.60 <= float(again["denoise"]) <= 0.78
     meta = (vpaths.candidates_dir("ent_0001") / again["files"][0]).with_suffix(".json")
     payload = __import__("json").loads(meta.read_text(encoding="utf-8"))
     assert payload.get("ref_image")
-    assert float(payload.get("denoise") or 0) >= 0.70
+    assert float(payload.get("denoise") or 0) >= 0.60
 
     from aivp.visual.sheets import generate_character_sheets
 

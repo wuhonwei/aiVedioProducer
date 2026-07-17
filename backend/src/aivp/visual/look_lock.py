@@ -19,9 +19,9 @@ def clamp_denoise(value: float, *, lo: float = 0.40, hi: float = 0.96) -> float:
 
 
 def candidate_denoise_for(view: str, base: float, *, index: int = 0) -> float:
-    """High enough denoise that pose/view can move; outfit locked by prompt/negative."""
+    """Balance pose change vs outfit lock; too-high denoise rewrites clothes."""
     v = (view or "").lower()
-    boost = 0.20
+    boost = 0.12
     if any(
         k in v
         for k in (
@@ -36,11 +36,11 @@ def candidate_denoise_for(view: str, base: float, *, index: int = 0) -> float:
             "turn",
         )
     ):
-        boost = 0.28
+        boost = 0.18
     elif any(k in v for k in ("hip", "clasp", "greeting")):
-        boost = 0.24
-    jitter = ((index % 5) - 2) * 0.02
-    return clamp_denoise(base + boost + jitter, lo=0.70, hi=0.88)
+        boost = 0.15
+    jitter = ((index % 5) - 2) * 0.015
+    return clamp_denoise(base + boost + jitter, lo=0.60, hi=0.78)
 
 
 def sheet_denoise_for(slot_key: str, base: float) -> float:

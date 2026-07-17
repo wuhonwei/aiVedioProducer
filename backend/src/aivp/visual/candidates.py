@@ -42,6 +42,7 @@ def _look_lock_candidate_negative(base_neg: str) -> str:
         "costume change, clothing redesign, wardrobe change, new clothes, "
         "different sleeve length, different collar, different garment color, "
         "recolored clothes, pattern change, accessory change, "
+        "shirtless, bare chest, topless, nude, naked, open shirt, exposed midriff, "
         "face morph, identity drift, age change, gender change, "
         "static copy of reference, identical pose as reference, frozen stance"
     )
@@ -99,8 +100,10 @@ def generate_candidates_for_character(
             prompt = (
                 f"{prompt}, exact same face hairstyle hair color and outfit as reference, "
                 "identical clothing colors seams accessories and fabric, "
+                "fully clothed covered chest closed collar, "
                 "must change body pose gesture and stance clearly, "
-                "do not redesign wardrobe or facial features, do not keep the reference pose"
+                "do not redesign wardrobe or facial features, do not keep the reference pose, "
+                "no shirtless no bare chest no revealing clothes"
             )
         name = f"{batch}_{i+1:03d}.png"
         dest = out_dir / name

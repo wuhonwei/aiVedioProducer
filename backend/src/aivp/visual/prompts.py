@@ -14,6 +14,7 @@ CHARACTER_NEGATIVE = (
     "upper body only, portrait crop, close-up, bust shot, "
     "modern clothes, western clothes, "
     "school uniform, armor, wedding dress, costume change, different outfit, "
+    "shirtless, bare chest, topless, nude, naked, open shirt, exposed midriff, "
     "multiple people, 2people, 2girls, 2boys, crowd"
 )
 
@@ -43,8 +44,93 @@ EXPRESSION_NEGATIVE = (
 _OUTFIT_DRIFT_NEGATIVE = (
     "costume change, different outfit, outfit swap, clothing mismatch, "
     "random clothes, bare shoulders, revealing clothes, modern streetwear, "
-    "hoodie, t-shirt, jeans, suit, dress suit"
+    "hoodie, t-shirt, jeans, suit, dress suit, "
+    "shirtless, bare chest, topless, nude, naked, open shirt, unbuttoned, "
+    "exposed midriff, navel, nipples, cleavage, skimpy clothes, lingerie, "
+    "armor, bikini, crop top, tank top, bare torso, no shirt, torn clothes"
 )
+
+# Chinese wardrobe phrases → English CLIP tokens (Guofeng SDXL is English-biased).
+_WARDROBE_EN_RULES: list[tuple[str, str]] = [
+    ("深蓝", "dark blue"),
+    ("青灰", "blue-gray"),
+    ("月白", "moon white"),
+    ("藕荷", "pale pink"),
+    ("玄色", "black"),
+    ("墨色", "ink black"),
+    ("朱红", "vermilion"),
+    ("藏青", "navy blue"),
+    ("披风", "cloak cape"),
+    ("斗篷", "cloak"),
+    ("短衫", "short tunic"),
+    ("长衫", "long robe tunic"),
+    ("长袍", "long robe"),
+    ("交领", "crossed-collar hanfu"),
+    ("行囊", "travel-cloak style"),
+    ("劲装", "martial tight outfit"),
+    ("官服", "official robe"),
+    ("布衣", "plain cloth robe"),
+    ("短褐", "coarse short jacket"),
+    ("绣裙", "embroidered skirt"),
+    ("裙", "skirt"),
+    ("腰带", "sash belt"),
+    ("布带", "cloth hair tie"),
+]
+
+
+def wardrobe_english_tokens(outfit_zh: str, *, colors: list[str] | None = None) -> list[str]:
+    """Translate key Chinese wardrobe cues into English tokens for SDXL."""
+    text = (outfit_zh or "").strip()
+    if not text:
+        return []
+    hits: list[str] = []
+    seen: set[str] = set()
+    for zh, en in _WARDROBE_EN_RULES:
+        if zh in text and en not in seen:
+            hits.append(en)
+            seen.add(en)
+    for c in colors or []:
+        c = str(c).strip()
+        if not c:
+            continue
+        for zh, en in _WARDROBE_EN_RULES:
+            if zh in c and en not in seen:
+                hits.append(en)
+                seen.add(en)
+    if not hits:
+        return [f"wearing traditional chinese guofeng outfit inspired by {text}"]
+    return [
+        "wearing " + " ".join(hits),
+        "guofeng hanfu-inspired clothing",
+    ]
+
+
+def clothing_coverage_tokens() -> list[str]:
+    return [
+        "fully clothed",
+        "covered chest and torso",
+        "closed collar",
+        "modest clothing",
+        "no bare skin on torso",
+        "proper historical chinese attire",
+    ]
+
+
+def wardrobe_lock_tokens(profile: dict) -> list[str]:
+    wardrobe = profile.get("wardrobe") if isinstance(profile.get("wardrobe"), dict) else {}
+    default_outfit = str(wardrobe.get("default") or "").strip()
+    colors_raw = wardrobe.get("colors") if isinstance(wardrobe.get("colors"), list) else []
+    colors = [str(c).strip() for c in colors_raw if str(c).strip()]
+    tokens: list[str] = []
+    if default_outfit:
+        tokens.extend(wardrobe_english_tokens(default_outfit, colors=colors))
+        tokens.append(f"wearing {default_outfit}")
+        tokens.append(f"身着{default_outfit}")
+        tokens.append("same outfit, identical clothing")
+        tokens.append("keep the exact described wardrobe")
+    tokens.extend(clothing_coverage_tokens())
+    return tokens
+
 
 
 def normalize_gender(
@@ -73,11 +159,27 @@ def normalize_gender(
     return "unspecified"
 
 
-def gender_lock_positive(gender: str) -> str:
+def gender_lock_positive(
+    gender: str,
+    *,
+    age_look: str | None = None,
+    text_hints: str = "",
+) -> str:
+    blob = f"{age_look or ''} {text_hints or ''}"
+    mid = any(k in blob for k in ("中年", "壮年", "mature", "middle-aged", "middle aged"))
+    elder = any(k in blob for k in ("老年", "老者", "elder", "elderly", "old man", "old woman"))
     if gender == "male":
-        return "1boy, solo, male, masculine face, young man"
+        if elder:
+            return "1boy, solo, male, elderly man, mature masculine face"
+        if mid:
+            return "1boy, solo, male, middle-aged man, mature masculine face, adult man"
+        return "1boy, solo, male, masculine face, young adult man"
     if gender == "female":
-        return "1girl, solo, female, feminine face, young woman"
+        if elder:
+            return "1girl, solo, female, elderly woman, mature feminine face"
+        if mid:
+            return "1girl, solo, female, middle-aged woman, mature feminine face, adult woman"
+        return "1girl, solo, female, feminine face, young adult woman"
     return "solo, 1person"
 
 
@@ -129,12 +231,7 @@ def appearance_lock_tokens(profile: dict) -> list[str]:
         val = appearance.get(key)
         if val:
             tokens.append(str(val).strip())
-    wardrobe = profile.get("wardrobe") if isinstance(profile.get("wardrobe"), dict) else {}
-    default_outfit = str(wardrobe.get("default") or "").strip()
-    if default_outfit:
-        tokens.append(f"wearing {default_outfit}")
-        tokens.append(f"身着{default_outfit}")
-        tokens.append("same outfit, identical clothing")
+    tokens.extend(wardrobe_lock_tokens(profile))
     anchors = profile.get("consistency_anchors") or []
     if isinstance(anchors, list):
         for a in anchors:
@@ -151,12 +248,16 @@ def build_candidate_prompt(profile: dict, view: str) -> str:
     """Gender + look + wardrobe locked early; view/framing last."""
     trigger = str(profile.get("trigger") or "character_aivp").strip()
     look = str(profile.get("prompt_zh") or profile.get("name") or trigger).strip()
+    age_look = str(profile.get("age_look") or "").strip()
     gender = normalize_gender(
         profile.get("gender_presentation"),
         text_hints=f"{look} {profile.get('name') or ''}",
     )
+    # Wardrobe English tokens first so CLIP sees clothes before pose fluff.
+    wardrobe_first = wardrobe_lock_tokens(profile)
     parts = [
-        gender_lock_positive(gender),
+        gender_lock_positive(gender, age_look=age_look, text_hints=look),
+        *wardrobe_first,
         "full body, head to toe, feet visible, entire figure in frame",
         trigger,
         look,
@@ -330,14 +431,17 @@ def build_character_prompt(
 ) -> str:
     """Gender + framing locks first; then trigger, look, appearance."""
     hints = look
+    age_look = ""
     if profile:
         hints = f"{look} {profile.get('name') or ''}"
+        age_look = str(profile.get("age_look") or "").strip()
     gender = normalize_gender(
         gender_presentation or (profile or {}).get("gender_presentation"),
         text_hints=hints,
     )
     parts = [
-        gender_lock_positive(gender),
+        gender_lock_positive(gender, age_look=age_look, text_hints=hints),
+        *(wardrobe_lock_tokens(profile) if profile else clothing_coverage_tokens()),
         framing.strip(),
         trigger.strip(),
         look.strip(),

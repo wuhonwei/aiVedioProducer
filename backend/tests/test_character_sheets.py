@@ -224,10 +224,39 @@ def test_candidate_prompt_locks_gender_and_wardrobe():
     assert "黑发束冠" in prompt
     assert "full body" in prompt
     assert "feet visible" in prompt
+    assert "fully clothed" in prompt
+    assert "blue-gray" in prompt or "long robe" in prompt
     neg = candidate_negative_for(profile)
     assert "1girl" in neg
     assert "different outfit" in neg or "costume change" in neg
+    assert "shirtless" in neg or "bare chest" in neg
     assert "upper body only" in neg or "cropped feet" in neg
+
+
+def test_candidate_prompt_middle_aged_male_outfit_english():
+    from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for, gender_lock_positive
+
+    profile = {
+        "trigger": "lin_yz_aivp",
+        "name": "林砚之",
+        "prompt_zh": "林砚之，男性，中年沉稳面相，身着深蓝行囊式披风短衫，国风动画角色定妆",
+        "gender_presentation": "masculine",
+        "age_look": "中年沉稳面相",
+        "wardrobe": {"default": "深蓝行囊式披风短衫", "colors": ["深蓝"]},
+    }
+    assert "middle-aged" in gender_lock_positive(
+        "male", age_look=profile["age_look"], text_hints=profile["prompt_zh"]
+    )
+    prompt = build_candidate_prompt(profile, "solo, 1person, full body")
+    assert "middle-aged" in prompt
+    assert "dark blue" in prompt
+    assert "cloak" in prompt
+    assert "short tunic" in prompt
+    assert "fully clothed" in prompt
+    assert "young man" not in prompt
+    neg = candidate_negative_for(profile)
+    assert "shirtless" in neg
+    assert "bare chest" in neg
 
 
 def test_turnaround_front_requires_full_body():
