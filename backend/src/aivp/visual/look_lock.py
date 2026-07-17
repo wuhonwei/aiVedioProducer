@@ -39,7 +39,8 @@ def sheet_denoise_for(slot_key: str, base: float) -> float:
     if key == "turnaround_side":
         return clamp_denoise(base + 0.12, hi=0.80)
     if key.startswith("expr_"):
-        return clamp_denoise(base + 0.10, hi=0.78)
+        # Need enough denoise to leave full-body look-lock composition for a face crop.
+        return clamp_denoise(base + 0.14, hi=0.80)
     return clamp_denoise(base)
 
 

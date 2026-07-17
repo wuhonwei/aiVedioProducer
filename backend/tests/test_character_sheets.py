@@ -157,6 +157,23 @@ def test_turnaround_side_back_skip_front_look_lock_image():
             assert "rear" in framing.lower() or "behind" in framing.lower()
 
 
+def test_expression_prompts_are_face_only():
+    from aivp.visual.prompts import build_character_prompt, sheet_negative_for
+
+    for key, _label, framing in EXPRESSION_SLOTS:
+        assert "facial close-up" in framing or "headshot" in framing
+        assert "no body" in framing
+        assert "full body" not in framing.lower()
+        prompt = build_character_prompt(
+            "lin_aivp", "青灰长衫少年", framing, gender_presentation="male"
+        )
+        assert "face" in prompt.lower() or "headshot" in prompt.lower()
+        neg = sheet_negative_for("male", slot_key=key)
+        assert "full body" in neg
+        assert "close-up" not in neg  # must not reuse turnaround CHARACTER_NEGATIVE ban
+        assert "upper body only" not in neg or "torso" in neg
+
+
 def test_probe_framing_mentions_person():
     assert "1person" in PROBE_FRAMING
     assert "人物半身特写" in PROBE_FRAMING
@@ -180,6 +197,7 @@ def test_turnaround_prompts_force_solo_not_sheet_plate():
             assert "looking at viewer" in neg or "face" in neg
         if key == "turnaround_front":
             assert "back view" in neg
+            assert "close-up" in neg  # turnaround still bans close-up
 
 
 def test_candidate_prompt_locks_gender_and_wardrobe():

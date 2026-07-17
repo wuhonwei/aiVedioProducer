@@ -107,7 +107,14 @@ def generate_character_sheets(
         )
         # Side/back: do NOT seed from a front look-lock image (pose stays front).
         use_ref = ref_image if (ref_image and sheet_uses_look_lock_image(key)) else None
-        if use_ref:
+        is_expr = key.startswith("expr_")
+        if use_ref and is_expr:
+            prompt = (
+                f"{prompt}, exact same face hairstyle and hair color as reference, "
+                "face-only headshot crop, only change facial expression, "
+                "no body no torso no hands, not a full-body copy of the reference"
+            )
+        elif use_ref:
             prompt = (
                 f"{prompt}, same character identity hairstyle and outfit as reference, "
                 "change pose camera angle and expression, not a copy of the reference photo"
@@ -119,6 +126,8 @@ def generate_character_sheets(
             )
         dest = out_dir / _unique_sheet_name(key)
         denoise = sheet_denoise_for(key, base_denoise) if use_ref else 1.0
+        # Square canvas for face headshots; portrait for full-body turnaround.
+        width, height = (768, 768) if is_expr else (768, 1024)
         backend.generate(
             prompt=prompt,
             negative=sheet_negative_for(
@@ -128,8 +137,8 @@ def generate_character_sheets(
             ),
             dest=dest,
             seed=(seed_base + i) % (2_147_483_647 + 1),
-            width=768,
-            height=1024,
+            width=width,
+            height=height,
             lora_name=lora,
             lora_strength=0.75,
             ref_image=use_ref,
@@ -160,7 +169,11 @@ def generate_character_sheets(
         caption = (
             f"{trigger}, {look}, {view_tag}, {framing}, "
             f"guofeng anime character {kind} reference, solo, 1person, "
-            "consistent character design"
+            + (
+                "face only headshot, facial close-up, consistent character face"
+                if is_expr
+                else "consistent character design"
+            )
         )
         dest.with_suffix(".txt").write_text(caption.strip(), encoding="utf-8")
         created.append({"key": key, "label": label, "file": dest.name, "kind": kind})

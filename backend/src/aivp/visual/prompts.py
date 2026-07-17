@@ -28,6 +28,18 @@ TURNAROUND_MULTI_NEGATIVE = (
 
 SHEET_NEGATIVE = CHARACTER_NEGATIVE + ", " + TURNAROUND_MULTI_NEGATIVE
 
+# Expressions are face-only — do NOT reuse CHARACTER_NEGATIVE (it bans close-up).
+EXPRESSION_NEGATIVE = (
+    "lowres, blurry, inconsistent face, bad anatomy, watermark, "
+    "scenery, landscape, palace, architecture, empty, no humans, "
+    "full body, entire body, head to toe, feet, legs, hands, arms, "
+    "torso, chest, waist, hips, standing, walking, sitting, "
+    "upper body, half body, cowboy shot, medium shot, wide shot, "
+    "modern clothes, western clothes, "
+    "school uniform, armor, wedding dress, costume change, different outfit, "
+    "multiple people, 2people, 2girls, 2boys, crowd"
+)
+
 _OUTFIT_DRIFT_NEGATIVE = (
     "costume change, different outfit, outfit swap, clothing mismatch, "
     "random clothes, bare shoulders, revealing clothes, modern streetwear, "
@@ -165,6 +177,13 @@ def build_candidate_prompt(profile: dict, view: str) -> str:
 
 def _view_lock_negative(slot_key: str | None) -> str:
     key = (slot_key or "").strip().lower()
+    if key.startswith("expr_"):
+        return (
+            "full body, entire figure, head to toe, feet visible, legs visible, "
+            "hands visible, arms visible, torso visible, shoulders down, "
+            "clothing folds on body, outfit details below neck, "
+            "standing pose, action pose, wide angle"
+        )
     if key == "turnaround_front":
         return (
             "back view, from behind, rear view, facing away, "
@@ -194,7 +213,9 @@ def sheet_negative_for(
     text_hints: str = "",
 ) -> str:
     gender = normalize_gender(gender_presentation, text_hints=text_hints)
-    parts = [CHARACTER_NEGATIVE, TURNAROUND_MULTI_NEGATIVE, _OUTFIT_DRIFT_NEGATIVE]
+    key = (slot_key or "").strip().lower()
+    base = EXPRESSION_NEGATIVE if key.startswith("expr_") else CHARACTER_NEGATIVE
+    parts = [base, TURNAROUND_MULTI_NEGATIVE, _OUTFIT_DRIFT_NEGATIVE]
     gneg = gender_lock_negative(gender)
     if gneg:
         parts.append(gneg)
@@ -243,46 +264,55 @@ TURNAROUND_SLOTS: list[tuple[str, str, str]] = [
     ),
 ]
 
+# Face-only headshots for LoRA expression coverage (not half/full body).
+_EXPRESSION_BASE = (
+    "solo, 1person, only face and head in frame, facial close-up headshot, "
+    "face filling the frame, hair and face only, neck crop ok, "
+    "no body, no torso, no hands, no arms, no legs, no feet, "
+    "looking at viewer, plain seamless white background, studio lighting, "
+    "guofeng anime style, consistent character face"
+)
+
 EXPRESSION_SLOTS: list[tuple[str, str, str]] = [
     (
         "expr_calm",
         "平静",
-        "solo, 1person, facial close-up, calm neutral expression, looking at viewer, simple background",
+        f"calm neutral expression, {_EXPRESSION_BASE}",
     ),
     (
         "expr_smile",
         "微笑",
-        "solo, 1person, facial close-up, gentle smile, looking at viewer, simple background",
+        f"gentle smile expression, {_EXPRESSION_BASE}",
     ),
     (
         "expr_happy",
         "开心",
-        "solo, 1person, facial close-up, happy joyful expression, looking at viewer, simple background",
+        f"happy joyful expression, {_EXPRESSION_BASE}",
     ),
     (
         "expr_confused",
         "疑惑",
-        "solo, 1person, facial close-up, confused puzzled expression, looking at viewer, simple background",
+        f"confused puzzled expression, {_EXPRESSION_BASE}",
     ),
     (
         "expr_angry",
         "愤怒",
-        "solo, 1person, facial close-up, angry expression, looking at viewer, simple background",
+        f"angry expression, {_EXPRESSION_BASE}",
     ),
     (
         "expr_sad",
         "悲伤",
-        "solo, 1person, facial close-up, sad expression, looking at viewer, simple background",
+        f"sad expression, {_EXPRESSION_BASE}",
     ),
     (
         "expr_surprised",
         "惊讶",
-        "solo, 1person, facial close-up, surprised expression, looking at viewer, simple background",
+        f"surprised expression, {_EXPRESSION_BASE}",
     ),
     (
         "expr_shy",
         "害羞",
-        "solo, 1person, facial close-up, shy embarrassed expression, looking at viewer, simple background",
+        f"shy embarrassed expression, {_EXPRESSION_BASE}",
     ),
 ]
 
