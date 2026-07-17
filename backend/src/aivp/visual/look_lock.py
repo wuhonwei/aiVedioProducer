@@ -10,8 +10,8 @@ from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import save_profile
 
 LOOK_LOCK_FOLDERS = frozenset({"candidates", "sheets", "generations"})
-# Higher default: keep identity/outfit, allow pose & camera to diverge from the ref.
-DEFAULT_LOOK_LOCK_DENOISE = 0.62
+# Keep face/outfit close to look-lock; pose/action comes from prompt, not high denoise.
+DEFAULT_LOOK_LOCK_DENOISE = 0.55
 
 
 def clamp_denoise(value: float, *, lo: float = 0.40, hi: float = 0.82) -> float:
@@ -19,18 +19,16 @@ def clamp_denoise(value: float, *, lo: float = 0.40, hi: float = 0.82) -> float:
 
 
 def candidate_denoise_for(view: str, base: float, *, index: int = 0) -> float:
-    """Per-view denoise so a batch is not near-copies of the look-lock image."""
+    """Mild denoise: preserve face/clothes; allow pose/action to move."""
     v = (view or "").lower()
     boost = 0.0
-    if any(k in v for k in ("full body", "walking", "sitting", "standing")):
-        boost = 0.08
-    elif any(k in v for k in ("side profile", "over the shoulder", "looking away", "three quarter")):
-        boost = 0.10
-    elif "close-up" in v:
-        boost = 0.06
-    # Small index jitter so adjacent candidates don't land on the same strength.
-    jitter = ((index % 5) - 2) * 0.025
-    return clamp_denoise(base + boost + jitter)
+    if any(k in v for k in ("walk", "bow", "wave", "point", "cross")):
+        boost = 0.04
+    elif any(k in v for k in ("hip", "clasp", "greeting")):
+        boost = 0.03
+    # Tiny jitter so a batch is not identical.
+    jitter = ((index % 5) - 2) * 0.015
+    return clamp_denoise(base + boost + jitter, lo=0.45, hi=0.68)
 
 
 def sheet_denoise_for(slot_key: str, base: float) -> float:
@@ -143,7 +141,7 @@ def resolve_look_lock(
     if not lock or not ref:
         return None, 1.0
     denoise = float(lock.get("denoise") or DEFAULT_LOOK_LOCK_DENOISE)
-    # Old default 0.48 was too copy-like; lift only that legacy value.
+    # Old default 0.48 was overly sticky; lift only that legacy value.
     if abs(denoise - 0.48) < 1e-6:
         denoise = DEFAULT_LOOK_LOCK_DENOISE
     return ref, clamp_denoise(denoise)

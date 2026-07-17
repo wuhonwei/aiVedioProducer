@@ -67,7 +67,7 @@ export function VisualPage({ projectId }: Props) {
   const [probeResult, setProbeResult] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Lightbox>(null);
   const [batchCount, setBatchCount] = useState(8);
-  const [lookLockDenoise, setLookLockDenoise] = useState(0.62);
+  const [lookLockDenoise, setLookLockDenoise] = useState(0.55);
   const [jobProgress, setJobProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
@@ -598,9 +598,8 @@ export function VisualPage({ projectId }: Props) {
               {active.look_lock_ready && (
                 <div className="bible-card" aria-label="look-lock-panel">
                   <p className="note" style={{ marginBottom: 8 }}>
-                    定妆已锁定：后续<strong>候选 / 三视图 / 表情</strong>会参考此图，但提高
-                    denoise 以拉开姿势/机位差异（当前基础{" "}
-                    {Number(active.look_lock?.denoise ?? lookLockDenoise).toFixed(2)}）
+                    定妆已锁定：后续候选会<strong>锁住脸与服饰</strong>，只换动作姿势（基础
+                    denoise {Number(active.look_lock?.denoise ?? lookLockDenoise).toFixed(2)}）
                   </p>
                   <div className="row" style={{ alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     <img
@@ -620,9 +619,9 @@ export function VisualPage({ projectId }: Props) {
                     <div className="row" style={{ gap: 6 }}>
                       {(
                         [
-                          ["贴合", 0.52],
-                          ["平衡", 0.62],
-                          ["多变", 0.72],
+                          ["更锁脸服", 0.48],
+                          ["平衡", 0.55],
+                          ["动作更大", 0.62],
                         ] as const
                       ).map(([label, value]) => (
                         <button

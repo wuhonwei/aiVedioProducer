@@ -23,6 +23,28 @@ VIEW_PROMPTS = [
     "solo, 1person, full body, head to toe, feet visible, standing relaxed pose, plain background",
 ]
 
+# When look-lock is on: keep face/outfit fixed; only vary body action/gesture.
+LOOK_LOCK_ACTION_PROMPTS = [
+    "full body, head to toe, feet visible, facing camera, standing neutral, arms relaxed at sides, plain background",
+    "full body, head to toe, feet visible, facing camera, waving one hand greeting pose, plain background",
+    "full body, head to toe, feet visible, facing camera, walking forward mid-step, plain background",
+    "full body, head to toe, feet visible, facing camera, slight respectful bow pose, plain background",
+    "full body, head to toe, feet visible, facing camera, hands clasped in front, plain background",
+    "full body, head to toe, feet visible, facing camera, one hand on hip standing pose, plain background",
+    "full body, head to toe, feet visible, facing camera, pointing forward with one hand, plain background",
+    "full body, head to toe, feet visible, facing camera, arms crossed standing pose, plain background",
+]
+
+
+def _look_lock_candidate_negative(base_neg: str) -> str:
+    extra = (
+        "different face, different hairstyle, different hair color, different outfit, "
+        "costume change, clothing redesign, wardrobe change, new clothes, "
+        "face morph, identity drift, age change, gender change"
+    )
+    return f"{base_neg}, {extra}"
+
+
 
 def _unique_stem(prefix: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
@@ -48,6 +70,8 @@ def generate_candidates_for_character(
     n = max(1, min(int(count), 100))
     neg = negative or candidate_negative_for(profile)
     ref_image, base_denoise = resolve_look_lock(vpaths, cid, profile)
+    if ref_image:
+        neg = _look_lock_candidate_negative(neg)
     batch = _unique_stem("cand")
     # New base each batch so Comfy does not replay the same 8 seeds forever.
     seed_base = fresh_seed()
@@ -57,15 +81,20 @@ def generate_candidates_for_character(
     for i in range(n):
         if should_cancel and should_cancel():
             break
-        view = VIEW_PROMPTS[i % len(VIEW_PROMPTS)]
+        if ref_image:
+            action = LOOK_LOCK_ACTION_PROMPTS[i % len(LOOK_LOCK_ACTION_PROMPTS)]
+            view = f"solo, 1person, {action}"
+        else:
+            view = VIEW_PROMPTS[i % len(VIEW_PROMPTS)]
         prompt = build_candidate_prompt(profile, view)
         denoise = 1.0
         if ref_image:
             denoise = candidate_denoise_for(view, base_denoise, index=i)
             used_denoises.append(denoise)
             prompt = (
-                f"{prompt}, same character identity hairstyle and outfit as reference, "
-                "change pose camera angle and expression, not a copy of the reference photo"
+                f"{prompt}, exact same face hairstyle hair color and outfit as reference, "
+                "identical clothing and appearance, only change body pose and gesture action, "
+                "do not redesign wardrobe or facial features"
             )
         name = f"{batch}_{i+1:03d}.png"
         dest = out_dir / name
