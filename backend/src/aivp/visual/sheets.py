@@ -8,7 +8,9 @@ from typing import Any
 
 from aivp.visual.image_backend import ImageBackend, fresh_seed
 from aivp.visual.look_lock import (
+    ensure_face_ref,
     resolve_look_lock,
+    sheet_cfg_for,
     sheet_denoise_for,
     sheet_uses_look_lock_image,
 )
@@ -105,27 +107,31 @@ def generate_character_sheets(
             gender_presentation=str(profile.get("gender_presentation") or ""),
             profile=profile,
         )
-        # Side/back: do NOT seed from a front look-lock image (pose stays front).
         use_ref = ref_image if (ref_image and sheet_uses_look_lock_image(key)) else None
         is_expr = key.startswith("expr_")
+        ref_kind = "full"
         if use_ref and is_expr:
+            # Face crop so img2img starts as a headshot, not full-body composition.
+            use_ref = ensure_face_ref(vpaths, cid, ref_image)
+            ref_kind = "face"
             prompt = (
                 f"{prompt}, exact same face hairstyle and hair color as reference, "
-                "face-only headshot crop, only change facial expression, "
-                "no body no torso no hands, not a full-body copy of the reference"
+                "face-only headshot, only change facial expression, "
+                "no body no torso no hands"
+            )
+        elif use_ref and key in {"turnaround_side", "turnaround_back"}:
+            prompt = (
+                f"{prompt}, keep same face hairstyle hair color and outfit colors as reference, "
+                "MUST change camera angle to the requested view, not a front copy"
             )
         elif use_ref:
             prompt = (
                 f"{prompt}, same character identity hairstyle and outfit as reference, "
-                "change pose camera angle and expression, not a copy of the reference photo"
-            )
-        elif ref_image and key in {"turnaround_side", "turnaround_back"}:
-            prompt = (
-                f"{prompt}, same character identity hairstyle and outfit as the locked look, "
-                "exact requested camera angle only"
+                "keep full body framing, not a copy of the reference photo"
             )
         dest = out_dir / _unique_sheet_name(key)
         denoise = sheet_denoise_for(key, base_denoise) if use_ref else 1.0
+        cfg = sheet_cfg_for(key) if use_ref else 8.0
         # Square canvas for face headshots; portrait for full-body turnaround.
         width, height = (768, 768) if is_expr else (768, 1024)
         backend.generate(
@@ -143,6 +149,7 @@ def generate_character_sheets(
             lora_strength=0.75,
             ref_image=use_ref,
             denoise=denoise,
+            cfg=cfg,
         )
         meta = {
             "key": key,
@@ -151,8 +158,9 @@ def generate_character_sheets(
             "prompt": prompt,
             "for_lora": True,
             "look_lock": bool(use_ref),
-            "look_lock_identity_only": bool(ref_image and not use_ref),
+            "look_lock_ref_kind": ref_kind if use_ref else None,
             "denoise": denoise,
+            "cfg": cfg,
         }
         dest.with_suffix(".meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"

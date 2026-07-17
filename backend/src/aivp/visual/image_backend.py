@@ -32,6 +32,7 @@ class ImageBackend(Protocol):
         lora_strength: float = 0.75,
         ref_image: Path | None = None,
         denoise: float = 1.0,
+        cfg: float | None = None,
     ) -> Path: ...
 
     def healthy(self) -> bool: ...
@@ -56,6 +57,7 @@ class StubImageBackend:
         lora_strength: float = 0.75,
         ref_image: Path | None = None,
         denoise: float = 1.0,
+        cfg: float | None = None,
     ) -> Path:
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -106,6 +108,7 @@ class StubImageBackend:
                     "lora_strength": lora_strength,
                     "ref_image": str(ref_image) if ref_image else None,
                     "denoise": denoise,
+                    "cfg": cfg,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -336,6 +339,7 @@ class ComfyImageBackend:
         lora_strength: float = 0.75,
         ref_image: Path | None = None,
         denoise: float = 1.0,
+        cfg: float | None = None,
     ) -> Path:
         if not self.healthy():
             raise RuntimeError("comfyui_unreachable")
@@ -350,6 +354,7 @@ class ComfyImageBackend:
         resolved_seed = int(seed) if seed is not None else fresh_seed()
         use_img2img = bool(ref_image) and Path(ref_image).exists() and float(denoise) < 0.999
         uploaded_name: str | None = None
+        resolved_cfg = float(cfg) if cfg is not None else (6.5 if use_img2img else 8.0)
 
         dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -365,6 +370,7 @@ class ComfyImageBackend:
                     width=width,
                     height=height,
                     denoise=float(denoise),
+                    cfg=resolved_cfg,
                     lora_name=lora_name,
                     lora_strength=lora_strength,
                     load_image_node="AIVPLoadImage",
@@ -377,6 +383,7 @@ class ComfyImageBackend:
                     seed=resolved_seed,
                     width=width,
                     height=height,
+                    cfg=resolved_cfg,
                     lora_name=lora_name,
                     lora_strength=lora_strength,
                 )
@@ -400,6 +407,7 @@ class ComfyImageBackend:
                     width=width,
                     height=height,
                     denoise=float(denoise),
+                    cfg=resolved_cfg,
                     lora_name=lora_name,
                     lora_strength=lora_strength,
                     load_image_node="LoadImage",
@@ -463,6 +471,7 @@ class ComfyImageBackend:
                         "ref_image": str(ref_image) if use_img2img else None,
                         "uploaded_image": uploaded_name,
                         "denoise": float(denoise) if use_img2img else 1.0,
+                        "cfg": resolved_cfg,
                     },
                     ensure_ascii=False,
                     indent=2,

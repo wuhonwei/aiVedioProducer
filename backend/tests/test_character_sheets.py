@@ -142,13 +142,16 @@ def test_visual_sheets_and_delete_api(tmp_path: Path):
     assert missing.status_code == 404
 
 
-def test_turnaround_side_back_skip_front_look_lock_image():
-    from aivp.visual.look_lock import sheet_uses_look_lock_image
+def test_turnaround_side_back_use_high_denoise_look_lock():
+    from aivp.visual.look_lock import sheet_cfg_for, sheet_denoise_for, sheet_uses_look_lock_image
 
     assert sheet_uses_look_lock_image("turnaround_front") is True
     assert sheet_uses_look_lock_image("expr_calm") is True
-    assert sheet_uses_look_lock_image("turnaround_side") is False
-    assert sheet_uses_look_lock_image("turnaround_back") is False
+    assert sheet_uses_look_lock_image("turnaround_side") is True
+    assert sheet_uses_look_lock_image("turnaround_back") is True
+    assert sheet_denoise_for("turnaround_side", 0.55) >= 0.88
+    assert sheet_denoise_for("turnaround_back", 0.55) >= 0.88
+    assert sheet_cfg_for("turnaround_side") >= 9.0
     for key, _label, framing in TURNAROUND_SLOTS:
         if key == "turnaround_side":
             assert "side" in framing.lower()

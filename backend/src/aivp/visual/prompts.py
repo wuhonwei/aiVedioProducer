@@ -248,18 +248,21 @@ TURNAROUND_SLOTS: list[tuple[str, str, str]] = [
     (
         "turnaround_side",
         "三视图侧面",
-        "STRICT side view only, FULL BODY head to toe, feet visible, "
-        "90-degree side profile, from the side, "
-        "head in profile, one ear visible, nose pointing left or right, "
-        "body parallel to camera, no front face, "
+        "STRICT side view only, STRICT 90-degree side profile, from the side, "
+        "FULL BODY head to toe, feet visible, "
+        "head in profile silhouette, one ear visible, nose pointing left, "
+        "body parallel to camera plane, chest not toward camera, no front face, "
+        "orthographic side character turnaround, "
         f"{_TURNAROUND_BASE}",
     ),
     (
         "turnaround_back",
         "三视图背面",
-        "STRICT rear view only, FULL BODY head to toe, feet visible, "
-        "from behind, back of head, facing away, "
-        "no face visible, no eyes, back of outfit visible, "
+        "STRICT rear view only, STRICT back view from behind, facing away, "
+        "FULL BODY head to toe, feet visible, "
+        "back of head only, no face, no eyes, no nose, no mouth, "
+        "spine toward camera, back of outfit fully visible, "
+        "orthographic rear character turnaround, "
         f"{_TURNAROUND_BASE}",
     ),
 ]

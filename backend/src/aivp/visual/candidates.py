@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from aivp.visual.image_backend import ImageBackend, fresh_seed
-from aivp.visual.look_lock import candidate_denoise_for, resolve_look_lock
+from aivp.visual.look_lock import candidate_cfg_for, candidate_denoise_for, resolve_look_lock
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters
 from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
@@ -23,16 +23,16 @@ VIEW_PROMPTS = [
     "solo, 1person, full body, head to toe, feet visible, standing relaxed pose, plain background",
 ]
 
-# When look-lock is on: keep face/outfit fixed; only vary body action/gesture.
+# When look-lock is on: keep face/outfit fixed; vary action and mild camera turn.
 LOOK_LOCK_ACTION_PROMPTS = [
     "full body, head to toe, feet visible, facing camera, standing neutral, arms relaxed at sides, plain background",
-    "full body, head to toe, feet visible, facing camera, waving one hand greeting pose, plain background",
+    "full body, head to toe, feet visible, three quarter view, waving one hand greeting pose, plain background",
     "full body, head to toe, feet visible, facing camera, walking forward mid-step, plain background",
-    "full body, head to toe, feet visible, facing camera, slight respectful bow pose, plain background",
+    "full body, head to toe, feet visible, slight body turn, respectful bow pose, plain background",
     "full body, head to toe, feet visible, facing camera, hands clasped in front, plain background",
-    "full body, head to toe, feet visible, facing camera, one hand on hip standing pose, plain background",
+    "full body, head to toe, feet visible, three quarter view, one hand on hip standing pose, plain background",
     "full body, head to toe, feet visible, facing camera, pointing forward with one hand, plain background",
-    "full body, head to toe, feet visible, facing camera, arms crossed standing pose, plain background",
+    "full body, head to toe, feet visible, slight three quarter turn, arms crossed standing pose, plain background",
 ]
 
 
@@ -40,7 +40,10 @@ def _look_lock_candidate_negative(base_neg: str) -> str:
     extra = (
         "different face, different hairstyle, different hair color, different outfit, "
         "costume change, clothing redesign, wardrobe change, new clothes, "
-        "face morph, identity drift, age change, gender change"
+        "different sleeve length, different collar, different garment color, "
+        "recolored clothes, pattern change, accessory change, "
+        "face morph, identity drift, age change, gender change, "
+        "static copy of reference, identical pose as reference, frozen stance"
     )
     return f"{base_neg}, {extra}"
 
@@ -88,13 +91,16 @@ def generate_candidates_for_character(
             view = VIEW_PROMPTS[i % len(VIEW_PROMPTS)]
         prompt = build_candidate_prompt(profile, view)
         denoise = 1.0
+        cfg = 8.0
         if ref_image:
             denoise = candidate_denoise_for(view, base_denoise, index=i)
             used_denoises.append(denoise)
+            cfg = candidate_cfg_for()
             prompt = (
                 f"{prompt}, exact same face hairstyle hair color and outfit as reference, "
-                "identical clothing and appearance, only change body pose and gesture action, "
-                "do not redesign wardrobe or facial features"
+                "identical clothing colors seams accessories and fabric, "
+                "must change body pose gesture and stance clearly, "
+                "do not redesign wardrobe or facial features, do not keep the reference pose"
             )
         name = f"{batch}_{i+1:03d}.png"
         dest = out_dir / name
@@ -107,6 +113,7 @@ def generate_candidates_for_character(
             height=1024,
             ref_image=ref_image,
             denoise=denoise,
+            cfg=cfg,
         )
         dest.with_suffix(".txt").write_text(prompt, encoding="utf-8")
         created.append(dest.name)
