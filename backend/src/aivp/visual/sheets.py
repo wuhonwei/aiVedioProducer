@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from aivp.visual.image_backend import ImageBackend, fresh_seed
-from aivp.visual.look_lock import resolve_look_lock
+from aivp.visual.look_lock import resolve_look_lock, sheet_denoise_for
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile
 from aivp.visual.prompts import (
@@ -67,18 +67,6 @@ def _unique_sheet_name(key: str) -> str:
     return f"sheet_{key}_{stamp}.png"
 
 
-def _sheet_denoise(slot_key: str, base: float) -> float:
-    """Raise denoise for large pose/view changes while keeping identity from look-lock."""
-    key = (slot_key or "").lower()
-    if key == "turnaround_back":
-        return min(0.72, base + 0.18)
-    if key == "turnaround_side":
-        return min(0.68, base + 0.12)
-    if key.startswith("expr_"):
-        return min(0.62, base + 0.08)
-    return max(0.25, min(0.75, base))
-
-
 def generate_character_sheets(
     vpaths: VisualPaths,
     character: dict,
@@ -115,11 +103,11 @@ def generate_character_sheets(
         )
         if ref_image:
             prompt = (
-                f"{prompt}, keep same character identity and outfit as reference, "
-                "consistent face hair and wardrobe"
+                f"{prompt}, same character identity hairstyle and outfit as reference, "
+                "change pose camera angle and expression, not a copy of the reference photo"
             )
         dest = out_dir / _unique_sheet_name(key)
-        denoise = _sheet_denoise(key, base_denoise) if ref_image else 1.0
+        denoise = sheet_denoise_for(key, base_denoise) if ref_image else 1.0
         backend.generate(
             prompt=prompt,
             negative=sheet_negative_for(

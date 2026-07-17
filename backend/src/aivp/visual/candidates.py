@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from aivp.visual.image_backend import ImageBackend, fresh_seed
-from aivp.visual.look_lock import resolve_look_lock
+from aivp.visual.look_lock import candidate_denoise_for, resolve_look_lock
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters
 from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
@@ -47,21 +47,25 @@ def generate_candidates_for_character(
     # No hard cap on how many times the user may generate; soft ceiling avoids runaway jobs.
     n = max(1, min(int(count), 100))
     neg = negative or candidate_negative_for(profile)
-    ref_image, denoise = resolve_look_lock(vpaths, cid, profile)
+    ref_image, base_denoise = resolve_look_lock(vpaths, cid, profile)
     batch = _unique_stem("cand")
     # New base each batch so Comfy does not replay the same 8 seeds forever.
     seed_base = fresh_seed()
     if on_progress:
         on_progress(0, n)
+    used_denoises: list[float] = []
     for i in range(n):
         if should_cancel and should_cancel():
             break
         view = VIEW_PROMPTS[i % len(VIEW_PROMPTS)]
         prompt = build_candidate_prompt(profile, view)
+        denoise = 1.0
         if ref_image:
+            denoise = candidate_denoise_for(view, base_denoise, index=i)
+            used_denoises.append(denoise)
             prompt = (
-                f"{prompt}, keep same character identity and outfit as reference, "
-                "consistent face and wardrobe"
+                f"{prompt}, same character identity hairstyle and outfit as reference, "
+                "change pose camera angle and expression, not a copy of the reference photo"
             )
         name = f"{batch}_{i+1:03d}.png"
         dest = out_dir / name
@@ -73,7 +77,7 @@ def generate_candidates_for_character(
             width=768,
             height=1024,
             ref_image=ref_image,
-            denoise=denoise if ref_image else 1.0,
+            denoise=denoise,
         )
         dest.with_suffix(".txt").write_text(prompt, encoding="utf-8")
         created.append(dest.name)
@@ -91,7 +95,9 @@ def generate_candidates_for_character(
         "files": created,
         "trigger": profile["trigger"],
         "look_lock": bool(ref_image),
-        "denoise": denoise if ref_image else 1.0,
+        "denoise": (
+            sum(used_denoises) / len(used_denoises) if used_denoises else (base_denoise if ref_image else 1.0)
+        ),
     }
 
 

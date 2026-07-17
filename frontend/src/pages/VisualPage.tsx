@@ -66,7 +66,7 @@ export function VisualPage({ projectId }: Props) {
   const [probePrompt, setProbePrompt] = useState("");
   const [probeResult, setProbeResult] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Lightbox>(null);
-  const [batchCount, setBatchCount] = useState(8);
+  const [lookLockDenoise, setLookLockDenoise] = useState(0.62);
   const [jobProgress, setJobProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
@@ -364,15 +364,20 @@ export function VisualPage({ projectId }: Props) {
     }
   };
 
-  const onSetLookLock = async (folder: string, filename: string) => {
+  const onSetLookLock = async (
+    folder: string,
+    filename: string,
+    denoise = lookLockDenoise,
+  ) => {
     if (!active) return;
     setBusy(true);
     setError(null);
     try {
+      setLookLockDenoise(denoise);
       await setVisualLookLock(projectId, active.character_id, {
         folder,
         filename,
-        denoise: 0.48,
+        denoise,
       });
       await refresh();
     } catch (e) {
@@ -592,11 +597,11 @@ export function VisualPage({ projectId }: Props) {
               {active.look_lock_ready && (
                 <div className="bible-card" aria-label="look-lock-panel">
                   <p className="note" style={{ marginBottom: 8 }}>
-                    定妆已锁定：后续<strong>候选 / 三视图 / 表情</strong>都会用 img2img
-                    参考此图（基础 denoise{" "}
-                    {Number(active.look_lock?.denoise ?? 0.48).toFixed(2)}；侧面/背面会略提高）
+                    定妆已锁定：后续<strong>候选 / 三视图 / 表情</strong>会参考此图，但提高
+                    denoise 以拉开姿势/机位差异（当前基础{" "}
+                    {Number(active.look_lock?.denoise ?? lookLockDenoise).toFixed(2)}）
                   </p>
-                  <div className="row" style={{ alignItems: "center", gap: 12 }}>
+                  <div className="row" style={{ alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     <img
                       src={visualFileUrl(
                         projectId,
@@ -608,6 +613,41 @@ export function VisualPage({ projectId }: Props) {
                       className="visual-thumb-img"
                       style={{ width: 96, height: 128 }}
                     />
+                    <div className="row" style={{ gap: 6 }}>
+                      {(
+                        [
+                          ["贴合", 0.52],
+                          ["平衡", 0.62],
+                          ["多变", 0.72],
+                        ] as const
+                      ).map(([label, value]) => (
+                        <button
+                          key={label}
+                          type="button"
+                          className={
+                            Math.abs(
+                              Number(active.look_lock?.denoise ?? lookLockDenoise) - value,
+                            ) < 0.01
+                              ? "btn btn-primary"
+                              : "btn btn-secondary"
+                          }
+                          disabled={busy || !active.look_lock?.file}
+                          onClick={() => {
+                            if (active.look_lock?.folder && active.look_lock?.file) {
+                              void onSetLookLock(
+                                active.look_lock.folder,
+                                active.look_lock.file,
+                                value,
+                              );
+                            } else {
+                              setLookLockDenoise(value);
+                            }
+                          }}
+                        >
+                          {label} {value.toFixed(2)}
+                        </button>
+                      ))}
+                    </div>
                     <button
                       type="button"
                       className="btn btn-secondary"

@@ -10,7 +10,39 @@ from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import save_profile
 
 LOOK_LOCK_FOLDERS = frozenset({"candidates", "sheets", "generations"})
-DEFAULT_LOOK_LOCK_DENOISE = 0.48
+# Higher default: keep identity/outfit, allow pose & camera to diverge from the ref.
+DEFAULT_LOOK_LOCK_DENOISE = 0.62
+
+
+def clamp_denoise(value: float, *, lo: float = 0.40, hi: float = 0.82) -> float:
+    return max(lo, min(hi, float(value)))
+
+
+def candidate_denoise_for(view: str, base: float, *, index: int = 0) -> float:
+    """Per-view denoise so a batch is not near-copies of the look-lock image."""
+    v = (view or "").lower()
+    boost = 0.0
+    if any(k in v for k in ("full body", "walking", "sitting", "standing")):
+        boost = 0.08
+    elif any(k in v for k in ("side profile", "over the shoulder", "looking away", "three quarter")):
+        boost = 0.10
+    elif "close-up" in v:
+        boost = 0.06
+    # Small index jitter so adjacent candidates don't land on the same strength.
+    jitter = ((index % 5) - 2) * 0.025
+    return clamp_denoise(base + boost + jitter)
+
+
+def sheet_denoise_for(slot_key: str, base: float) -> float:
+    """Raise denoise for large pose/view changes while keeping identity from look-lock."""
+    key = (slot_key or "").lower()
+    if key == "turnaround_back":
+        return clamp_denoise(base + 0.16, hi=0.82)
+    if key == "turnaround_side":
+        return clamp_denoise(base + 0.12, hi=0.80)
+    if key.startswith("expr_"):
+        return clamp_denoise(base + 0.10, hi=0.78)
+    return clamp_denoise(base)
 
 
 def look_lock_dir(vpaths: VisualPaths, character_id: str) -> Path:
@@ -58,7 +90,7 @@ def set_look_lock(
     if cap.exists():
         shutil.copy2(cap, dest_dir / "ref.txt")
 
-    strength = max(0.25, min(0.75, float(denoise)))
+    strength = clamp_denoise(denoise)
     profile["look_lock"] = {
         "folder": folder,
         "file": filename,
@@ -105,4 +137,7 @@ def resolve_look_lock(
     if not lock or not ref:
         return None, 1.0
     denoise = float(lock.get("denoise") or DEFAULT_LOOK_LOCK_DENOISE)
-    return ref, max(0.25, min(0.75, denoise))
+    # Old default 0.48 was too copy-like; lift only that legacy value.
+    if abs(denoise - 0.48) < 1e-6:
+        denoise = DEFAULT_LOOK_LOCK_DENOISE
+    return ref, clamp_denoise(denoise)
