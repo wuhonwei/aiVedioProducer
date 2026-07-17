@@ -61,6 +61,11 @@ def _lora_name(profile: dict, vpaths: VisualPaths, character_id: str) -> str | N
     return None
 
 
+def _unique_sheet_name(key: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    return f"sheet_{key}_{stamp}.png"
+
+
 def generate_character_sheets(
     vpaths: VisualPaths,
     character: dict,
@@ -85,7 +90,7 @@ def generate_character_sheets(
         if should_cancel and should_cancel():
             break
         prompt = build_character_prompt(trigger, look, framing)
-        dest = out_dir / f"sheet_{key}.png"
+        dest = out_dir / _unique_sheet_name(key)
         backend.generate(
             prompt=prompt,
             negative=sheet_negative_for(str(profile.get("gender_presentation") or "")),

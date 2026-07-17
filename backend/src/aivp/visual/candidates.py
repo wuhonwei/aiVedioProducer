@@ -42,6 +42,11 @@ def build_candidate_prompt(profile: dict, view: str) -> str:
     return "，".join([p for p in parts if p])
 
 
+def _unique_stem(prefix: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    return f"{prefix}_{stamp}"
+
+
 def generate_candidates_for_character(
     vpaths: VisualPaths,
     character: dict,
@@ -54,15 +59,19 @@ def generate_candidates_for_character(
     profile = ensure_profile(vpaths, character)
     cid = profile["character_id"]
     out_dir = vpaths.candidates_dir(cid)
+    out_dir.mkdir(parents=True, exist_ok=True)
     created: list[str] = []
-    n = max(1, min(count, len(VIEW_PROMPTS)))
+    # No hard cap on how many times the user may generate; soft ceiling avoids runaway jobs.
+    n = max(1, min(int(count), 100))
     neg = negative or character_negative_for(str(profile.get("gender_presentation") or ""))
+    batch = _unique_stem("cand")
     for i in range(n):
         if should_cancel and should_cancel():
             break
         view = VIEW_PROMPTS[i % len(VIEW_PROMPTS)]
         prompt = build_candidate_prompt(profile, view)
-        dest = out_dir / f"cand_{i+1:02d}.png"
+        name = f"{batch}_{i+1:03d}.png"
+        dest = out_dir / name
         backend.generate(
             prompt=prompt,
             negative=neg,
@@ -71,8 +80,7 @@ def generate_candidates_for_character(
             width=768,
             height=1024,
         )
-        # caption for later training
-        (out_dir / f"cand_{i+1:02d}.txt").write_text(
+        dest.with_suffix(".txt").write_text(
             f"{profile['trigger']}, {view}, {profile.get('prompt_zh') or ''}".strip(),
             encoding="utf-8",
         )

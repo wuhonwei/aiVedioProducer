@@ -301,12 +301,15 @@ export type VisualCharacter = {
   sheet_count?: number;
   generation_count?: number;
   lora_ready: boolean;
+  train_status?: string;
+  probe_status?: string;
   candidates: string[];
   curated: string[];
   sheets?: string[];
   generations?: string[];
   status?: string;
   prompt_zh?: string;
+  lora_file?: string | null;
 };
 
 export const listVisualCharacters = (projectId: string) =>
@@ -364,6 +367,38 @@ export const curateVisualCharacter = (
     },
   );
 
+export const checkVisualTrainset = (projectId: string, characterId: string) =>
+  req<{
+    character_id: string;
+    trigger: string;
+    image_count: number;
+    caption_count: number;
+    candidate_count: number;
+    turnaround_count: number;
+    expression_count: number;
+    has_front: boolean;
+    has_side: boolean;
+    has_back: boolean;
+    missing_captions: string[];
+    trigger_mismatch: string[];
+    warnings: string[];
+    can_train: boolean;
+    score: number;
+  }>(`/api/projects/${projectId}/visual/characters/${characterId}/trainset/check`);
+
+export const packageVisualLora = (projectId: string, characterId: string) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/lora/package`,
+    { method: "POST" },
+  );
+
+export const startVisualLoraTrain = (projectId: string, characterId: string) =>
+  req<{ id: string; status: string; kind?: string }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/lora/train`,
+    { method: "POST" },
+  );
+
+/** @deprecated Prefer packageVisualLora + startVisualLoraTrain */
 export const trainVisualLora = (projectId: string, characterIds?: string[]) =>
   req<{ results: Array<Record<string, unknown>> }>(
     `/api/projects/${projectId}/visual/lora/train`,
@@ -374,9 +409,43 @@ export const trainVisualLora = (projectId: string, characterIds?: string[]) =>
     },
   );
 
+export const probeVisualLora = (
+  projectId: string,
+  characterId: string,
+  prompt = "",
+) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/lora/probe`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ character_id: characterId, prompt, is_probe: true }),
+    },
+  );
+
+export const approveVisualLora = (projectId: string, characterId: string) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/lora/approve`,
+    { method: "POST" },
+  );
+
+export const rejectVisualLora = (
+  projectId: string,
+  characterId: string,
+  note = "",
+) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/lora/reject`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note }),
+    },
+  );
+
 export const visualT2I = (
   projectId: string,
-  body: { character_id: string; prompt: string; shot_id?: string },
+  body: { character_id: string; prompt: string; shot_id?: string; is_probe?: boolean },
 ) =>
   req<Record<string, unknown>>(`/api/projects/${projectId}/visual/t2i`, {
     method: "POST",

@@ -1,14 +1,18 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  approveVisualLora,
+  checkVisualTrainset,
   curateVisualCharacter,
   deleteVisualFile,
   getVisualJob,
   listVisualCharacters,
+  packageVisualLora,
+  probeVisualLora,
+  rejectVisualLora,
   startVisualCandidates,
+  startVisualLoraTrain,
   startVisualSheets,
-  trainVisualLora,
   visualFileUrl,
-  visualT2I,
   type VisualCharacter,
 } from "../api/client";
 
@@ -40,8 +44,13 @@ function sheetLabel(filename: string): string {
     sheet_expr_surprised: "惊讶",
     sheet_expr_shy: "害羞",
   };
-  const key = filename.replace(/\.png$/i, "");
-  return map[key] || filename;
+  const base = filename.replace(/\.png$/i, "");
+  // Prefer longest key match so sheet_expr_calm_TIMESTAMP still labels as 平静
+  const keys = Object.keys(map).sort((a, b) => b.length - a.length);
+  for (const key of keys) {
+    if (base === key || base.startsWith(`${key}_`)) return map[key];
+  }
+  return filename;
 }
 
 export function VisualPage({ projectId }: Props) {
@@ -55,6 +64,19 @@ export function VisualPage({ projectId }: Props) {
   const [probePrompt, setProbePrompt] = useState("");
   const [probeResult, setProbeResult] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Lightbox>(null);
+  const [trainCheck, setTrainCheck] = useState<{
+    can_train: boolean;
+    score: number;
+    image_count: number;
+    caption_count: number;
+    turnaround_count: number;
+    expression_count: number;
+    candidate_count: number;
+    has_front: boolean;
+    has_side: boolean;
+    has_back: boolean;
+    warnings: string[];
+  } | null>(null);
 
   const refresh = async () => {
     const data = await listVisualCharacters(projectId);
@@ -101,6 +123,7 @@ export function VisualPage({ projectId }: Props) {
     if (!active) return;
     setProbePrompt(defaultProbePrompt(active));
     setProbeResult(null);
+    setTrainCheck(null);
   }, [active?.character_id, active?.prompt_zh, active?.name]);
 
   const pollJob = async (jobId: string) => {
@@ -193,6 +216,8 @@ export function VisualPage({ projectId }: Props) {
         throw new Error("请至少勾选候选图或角色表（三视图/表情）加入训练集");
       }
       await curateVisualCharacter(projectId, active.character_id, keep, keepSheets);
+      const check = await checkVisualTrainset(projectId, active.character_id);
+      setTrainCheck(check);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -208,12 +233,25 @@ export function VisualPage({ projectId }: Props) {
     setSelectedSheets(next);
   };
 
-  const onTrain = async () => {
+  const onCheckTrainset = async () => {
     if (!active) return;
     setBusy(true);
     setError(null);
     try {
-      await trainVisualLora(projectId, [active.character_id]);
+      setTrainCheck(await checkVisualTrainset(projectId, active.character_id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onPackage = async () => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await packageVisualLora(projectId, active.character_id);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -222,21 +260,51 @@ export function VisualPage({ projectId }: Props) {
     }
   };
 
+  const onTrain = async () => {
+    if (!active) return;
+    await runVisualJob(() => startVisualLoraTrain(projectId, active.character_id));
+  };
+
   const onProbe = async () => {
     if (!active) return;
     setBusy(true);
     setError(null);
     try {
-      const r = await visualT2I(projectId, {
-        character_id: active.character_id,
-        prompt: probePrompt,
-      });
+      const r = await probeVisualLora(projectId, active.character_id, probePrompt);
       const file = String(r.file || "");
       setProbeResult(
         file
           ? visualFileUrl(projectId, active.character_id, "generations", file)
           : null,
       );
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onApproveLora = async () => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await approveVisualLora(projectId, active.character_id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRejectLora = async () => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await rejectVisualLora(projectId, active.character_id, "probe_rejected");
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -313,8 +381,8 @@ export function VisualPage({ projectId }: Props) {
     <section className="panel">
       <h2>角色视觉 / LoRA</h2>
       <p className="panel-lead">
-        仅 major 角色：候选图作补充；<strong>三视图 + 表情表</strong>专用于 LoRA
-        微调（生成时已写 caption）。勾选后「确认训练集」→「训练 / 导出包」。当前后端：
+        仅 major 角色：候选 / 三视图 / 表情均可<strong>多次点击追加生成</strong>
+        （不覆盖旧图）。勾选后「确认训练集」→「训练 / 导出包」。当前后端：
         <strong> {backend}</strong>
         {backend === "stub" ? "（占位出图，接好 Comfy 后改 AIVP_IMAGE_BACKEND=comfy）" : ""}。
       </p>
@@ -333,7 +401,10 @@ export function VisualPage({ projectId }: Props) {
                   <span className="note">
                     {" "}
                     · 候选{c.candidate_count}/表{c.sheet_count ?? 0}/已选{c.curated_count}
-                    {c.lora_ready ? " · LoRA" : ""}
+                    {c.lora_ready ? " · LoRA✓" : ""}
+                    {c.train_status && c.train_status !== "not_started"
+                      ? ` · ${c.train_status}`
+                      : ""}
                   </span>
                 </button>
               </li>
@@ -349,11 +420,14 @@ export function VisualPage({ projectId }: Props) {
                 {active.name}
               </h3>
               <p className="note">
-                trigger：<code>{active.trigger}</code> · 状态 {active.status || "—"}
+                trigger：<code>{active.trigger}</code> · 状态 {active.status || "—"} ·
+                train {active.train_status || "not_started"} · probe{" "}
+                {active.probe_status || "not_started"}
+                {active.lora_ready ? " · lora_ready" : ""}
               </p>
               <p className="bible-plain">{active.prompt_zh || "（无 prompt_zh）"}</p>
 
-              <div className="row">
+              <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -373,12 +447,54 @@ export function VisualPage({ projectId }: Props) {
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  disabled={busy}
+                  disabled={busy || active.curated_count <= 0}
+                  onClick={() => void onCheckTrainset()}
+                >
+                  检查训练集
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy || !trainCheck?.can_train}
+                  onClick={() => void onPackage()}
+                >
+                  导出训练包
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={
+                    busy ||
+                    !(
+                      active.train_status === "package_ready" ||
+                      active.status === "package_ready"
+                    )
+                  }
                   onClick={() => void onTrain()}
                 >
-                  训练 / 导出包
+                  开始微调
                 </button>
               </div>
+              {trainCheck && (
+                <div className="bible-card" aria-label="trainset-check">
+                  <p className="note">
+                    训练集质量：{trainCheck.can_train ? "可训练" : "不建议训练"} · 分数{" "}
+                    {trainCheck.score}
+                  </p>
+                  <p className="note">
+                    已选 {trainCheck.image_count} · caption {trainCheck.caption_count}/
+                    {trainCheck.image_count} · 三视图 {trainCheck.turnaround_count} · 表情{" "}
+                    {trainCheck.expression_count} · 候选 {trainCheck.candidate_count}
+                  </p>
+                  <p className="note">
+                    正面 {trainCheck.has_front ? "✓" : "✗"} · 侧面{" "}
+                    {trainCheck.has_side ? "✓" : "✗"} · 背面 {trainCheck.has_back ? "✓" : "✗"}
+                  </p>
+                  {!!trainCheck.warnings.length && (
+                    <p className="note">warnings: {trainCheck.warnings.join(", ")}</p>
+                  )}
+                </div>
+              )}
 
               <h4 style={{ marginBottom: 0 }}>候选图</h4>
               <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
@@ -529,21 +645,54 @@ export function VisualPage({ projectId }: Props) {
 
               <div className="stack" style={{ marginTop: 8 }}>
                 <label className="field">
-                  试生成 prompt（含角色定妆；trigger 仍会自动附加）
+                  试生成验证（训练完成后用 trigger 验证 LoRA）
                   <input
                     value={probePrompt}
                     onChange={(e) => setProbePrompt(e.target.value)}
                     aria-label="probe-prompt"
                   />
                 </label>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={busy}
-                  onClick={() => void onProbe()}
-                >
-                  试生成（自动带 trigger）
-                </button>
+                <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={
+                      busy ||
+                      !(
+                        active.train_status === "trained" ||
+                        Boolean(active.lora_file) ||
+                        active.probe_status === "pending" ||
+                        active.probe_status === "rejected"
+                      )
+                    }
+                    onClick={() => void onProbe()}
+                  >
+                    试生成验证
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={
+                      busy ||
+                      Boolean(active.lora_ready) ||
+                      !(
+                        active.train_status === "trained" ||
+                        active.probe_status === "pending"
+                      )
+                    }
+                    onClick={() => void onApproveLora()}
+                  >
+                    确认 LoRA 可用
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busy || active.probe_status === "not_started"}
+                    onClick={() => void onRejectLora()}
+                  >
+                    退回重新训练
+                  </button>
+                </div>
                 {probeResult && active && (
                   <div className="stack">
                     <div className="row">

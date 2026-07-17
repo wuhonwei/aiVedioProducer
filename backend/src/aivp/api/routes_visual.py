@@ -19,11 +19,17 @@ from aivp.paths import ProjectPaths
 from aivp.visual.candidates import generate_candidates
 from aivp.visual.curate import curate_candidates
 from aivp.visual.image_backend import get_image_backend
-from aivp.visual.lora_train import run_lora_train
+from aivp.visual.lora_train import execute_lora_train, export_train_package, run_lora_train
 from aivp.visual.paths import VisualPaths
-from aivp.visual.profiles import character_status, ensure_profile, load_major_characters
+from aivp.visual.profiles import (
+    build_lora_refs,
+    character_status,
+    ensure_profile,
+    load_major_characters,
+)
 from aivp.visual.sheets import generate_character_sheets
-from aivp.visual.t2i import generate_with_character
+from aivp.visual.t2i import approve_lora, generate_with_character, reject_lora
+from aivp.visual.trainset_check import check_trainset
 
 _VISUAL_FOLDERS = frozenset({"candidates", "curated", "generations", "lora", "sheets"})
 
@@ -75,8 +81,13 @@ class TrainBody(BaseModel):
 
 class T2IBody(BaseModel):
     character_id: str
-    prompt: str
+    prompt: str = ""
     shot_id: str | None = None
+    is_probe: bool = False
+
+
+class ProbeRejectBody(BaseModel):
+    note: str = ""
 
 
 class SheetsBody(BaseModel):
@@ -216,8 +227,37 @@ def curate_character(
     )
 
 
-@router.post("/projects/{project_id}/visual/lora/train")
-def train_lora(
+@router.get("/projects/{project_id}/visual/characters/{character_id}/trainset/check")
+def trainset_check(
+    project_id: str,
+    character_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    return check_trainset(vpaths, character_id)
+
+
+@router.post("/projects/{project_id}/visual/characters/{character_id}/lora/package")
+def package_lora_character(
+    project_id: str,
+    character_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    try:
+        return export_train_package(vpaths, character_id, require_can_train=True)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/projects/{project_id}/visual/lora/package")
+def package_lora_batch(
     project_id: str,
     body: TrainBody | None = None,
     db: Session = Depends(get_db),
@@ -235,8 +275,165 @@ def train_lora(
     for ch in majors:
         cid = str(ch.get("id"))
         ensure_profile(vpaths, ch)
+        try:
+            results.append(export_train_package(vpaths, cid, require_can_train=True))
+        except (FileNotFoundError, ValueError) as e:
+            results.append({"character_id": cid, "packaged": False, "error": str(e)})
+    return {"results": results}
+
+
+@router.post(
+    "/projects/{project_id}/visual/characters/{character_id}/lora/train",
+    status_code=202,
+)
+def start_lora_train_character(
+    project_id: str,
+    character_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    if not (getattr(settings, "lora_train_cmd", "") or ""):
+        raise HTTPException(status_code=400, detail="lora_train_cmd_not_configured")
+    vpaths = VisualPaths(settings.data_root, project_id)
+    package = vpaths.lora_dir(character_id) / "train_package.json"
+    if not package.exists():
+        raise HTTPException(status_code=400, detail="train_package_missing; export package first")
+    check = check_trainset(vpaths, character_id)
+    if not check.get("can_train"):
+        raise HTTPException(status_code=400, detail=f"trainset_not_ready:{check.get('warnings')}")
+
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id,
+        "project_id": project_id,
+        "kind": "lora_train",
+        "character_id": character_id,
+        "status": "queued",
+        "progress_done": 0,
+        "progress_total": 1,
+        "error": None,
+        "result": None,
+    }
+    path = _job_path(vpaths, job_id)
+    _write_job(path, job)
+
+    def _worker() -> None:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["status"] = "running"
+        _write_job(path, data)
+        try:
+            result = execute_lora_train(vpaths, character_id, settings)
+            data["progress_done"] = 1
+            if result.get("trained"):
+                data["status"] = "succeeded"
+            else:
+                data["status"] = "failed"
+                data["error"] = result.get("stderr") or result.get("train_error") or "train_failed"
+            data["result"] = result
+            _write_job(path, data)
+        except Exception as e:  # noqa: BLE001
+            data["status"] = "failed"
+            data["error"] = str(e)
+            _write_job(path, data)
+
+    if getattr(request.app.state, "run_jobs_inline", False):
+        _worker()
+    else:
+        threading.Thread(target=_worker, daemon=False, name=f"aivp-lora-{job_id}").start()
+    return job
+
+
+@router.post("/projects/{project_id}/visual/lora/train")
+def train_lora(
+    project_id: str,
+    body: TrainBody | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Legacy sync entry: export package; train if cmd configured."""
+    _require_project(db, project_id)
+    body = body or TrainBody()
+    bible = _load_bible(settings, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    majors = load_major_characters(bible)
+    if body.character_ids:
+        want = set(body.character_ids)
+        majors = [c for c in majors if c.get("id") in want]
+    results = []
+    for ch in majors:
+        cid = str(ch.get("id"))
+        ensure_profile(vpaths, ch)
         results.append(run_lora_train(vpaths, cid, settings))
     return {"results": results}
+
+
+@router.post("/projects/{project_id}/visual/characters/{character_id}/lora/probe")
+def probe_lora(
+    project_id: str,
+    character_id: str,
+    body: T2IBody | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    backend = get_image_backend(settings)
+    prompt = (body.prompt if body else "") or ""
+    return generate_with_character(
+        vpaths,
+        character_id,
+        prompt,
+        backend,
+        shot_id=(body.shot_id if body else None) or "probe",
+        is_probe=True,
+    )
+
+
+@router.post("/projects/{project_id}/visual/characters/{character_id}/lora/approve")
+def approve_lora_endpoint(
+    project_id: str,
+    character_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    try:
+        return approve_lora(vpaths, character_id)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/projects/{project_id}/visual/characters/{character_id}/lora/reject")
+def reject_lora_endpoint(
+    project_id: str,
+    character_id: str,
+    body: ProbeRejectBody | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    try:
+        return reject_lora(vpaths, character_id, note=(body.note if body else ""))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.get("/projects/{project_id}/visual/lora-refs")
+def get_lora_refs(
+    project_id: str,
+    character_ids: str = "",
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    ids = [c.strip() for c in character_ids.split(",") if c.strip()]
+    refs, warnings = build_lora_refs(vpaths, ids, only_ready=True)
+    return {"lora_refs": refs, "warnings": warnings}
 
 
 @router.post("/projects/{project_id}/visual/t2i")
@@ -255,6 +452,7 @@ def t2i(
         body.prompt,
         backend,
         shot_id=body.shot_id,
+        is_probe=bool(body.is_probe),
     )
 
 
