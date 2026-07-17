@@ -55,6 +55,7 @@ def generate_candidates_for_character(
     count: int = 8,
     negative: str | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     profile = ensure_profile(vpaths, character)
     cid = profile["character_id"]
@@ -67,6 +68,8 @@ def generate_candidates_for_character(
     batch = _unique_stem("cand")
     # New base each batch so Comfy does not replay the same 8 seeds forever.
     seed_base = fresh_seed()
+    if on_progress:
+        on_progress(0, n)
     for i in range(n):
         if should_cancel and should_cancel():
             break
@@ -87,6 +90,8 @@ def generate_candidates_for_character(
             encoding="utf-8",
         )
         created.append(dest.name)
+        if on_progress:
+            on_progress(len(created), n)
     profile["status"] = "candidates_ready"
     profile["candidates_generated_at"] = datetime.now(timezone.utc).isoformat()
     vpaths.profile_json(cid).write_text(
@@ -110,15 +115,29 @@ def generate_candidates(
         want = set(character_ids)
         majors = [c for c in majors if c.get("id") in want]
     results = []
-    total = max(len(majors), 1)
-    for i, ch in enumerate(majors):
+    n = max(1, min(int(count), 100))
+    total_images = max(len(majors), 1) * n
+    done_images = 0
+    if on_progress:
+        on_progress(0, total_images)
+    for ch in majors:
         if should_cancel and should_cancel():
             break
-        results.append(
-            generate_candidates_for_character(
-                vpaths, ch, backend, count=count, should_cancel=should_cancel
-            )
+
+        def _char_progress(done: int, _total: int, base: int = done_images) -> None:
+            if on_progress:
+                on_progress(base + done, total_images)
+
+        result = generate_candidates_for_character(
+            vpaths,
+            ch,
+            backend,
+            count=n,
+            should_cancel=should_cancel,
+            on_progress=_char_progress,
         )
+        results.append(result)
+        done_images += len(result.get("files") or [])
         if on_progress:
-            on_progress(i + 1, total)
+            on_progress(done_images, total_images)
     return {"characters": results, "count": len(results)}

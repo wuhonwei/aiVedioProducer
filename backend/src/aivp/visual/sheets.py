@@ -87,6 +87,8 @@ def generate_character_sheets(
     created: list[dict[str, str]] = []
     total = len(slots)
     seed_base = fresh_seed()
+    if on_progress:
+        on_progress(0, total)
     for i, (key, label, framing) in enumerate(slots):
         if should_cancel and should_cancel():
             break
@@ -120,7 +122,7 @@ def generate_character_sheets(
         dest.with_suffix(".txt").write_text(caption.strip(), encoding="utf-8")
         created.append({"key": key, "label": label, "file": dest.name, "kind": kind})
         if on_progress:
-            on_progress(i + 1, total)
+            on_progress(len(created), total)
     profile["status"] = "sheets_ready"
     profile["sheets_generated_at"] = datetime.now(timezone.utc).isoformat()
     vpaths.profile_json(cid).write_text(

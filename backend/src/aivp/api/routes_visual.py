@@ -67,7 +67,7 @@ def _write_job(path: Path, data: dict) -> None:
 
 class CandidatesBody(BaseModel):
     character_ids: list[str] | None = None
-    count: int = 8
+    count: int = Field(default=8, ge=1, le=100)
 
 
 class CurateBody(BaseModel):

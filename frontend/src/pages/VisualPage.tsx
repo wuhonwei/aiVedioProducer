@@ -64,6 +64,10 @@ export function VisualPage({ projectId }: Props) {
   const [probePrompt, setProbePrompt] = useState("");
   const [probeResult, setProbeResult] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Lightbox>(null);
+  const [batchCount, setBatchCount] = useState(8);
+  const [jobProgress, setJobProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
   const [trainCheck, setTrainCheck] = useState<{
     can_train: boolean;
     score: number;
@@ -102,22 +106,30 @@ export function VisualPage({ projectId }: Props) {
 
   useEffect(() => {
     if (!active) return;
-    const next: Record<string, boolean> = {};
-    for (const name of active.candidates) {
-      next[name] = active.curated.includes(name);
-    }
-    setSelected(next);
-    const sheets = active.sheets || [];
-    const hasCuratedSheets = sheets.some((n) => active.curated.includes(n));
-    const sheetsNext: Record<string, boolean> = {};
-    for (const name of sheets) {
-      // LoRA primary set: default-select all sheets until user has curated some.
-      sheetsNext[name] = hasCuratedSheets
-        ? active.curated.includes(name)
-        : true;
-    }
-    setSelectedSheets(sheetsNext);
-  }, [active]);
+    setSelected((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const name of active.candidates) {
+        next[name] =
+          name in prev ? Boolean(prev[name]) : active.curated.includes(name);
+      }
+      return next;
+    });
+    setSelectedSheets((prev) => {
+      const sheets = active.sheets || [];
+      const hasCuratedSheets = sheets.some((n) => active.curated.includes(n));
+      const next: Record<string, boolean> = {};
+      for (const name of sheets) {
+        if (name in prev) {
+          next[name] = Boolean(prev[name]);
+        } else {
+          next[name] = hasCuratedSheets
+            ? active.curated.includes(name)
+            : true;
+        }
+      }
+      return next;
+    });
+  }, [active?.character_id, active?.candidates, active?.sheets, active?.curated]);
 
   useEffect(() => {
     if (!active) return;
@@ -127,10 +139,25 @@ export function VisualPage({ projectId }: Props) {
   }, [active?.character_id, active?.prompt_zh, active?.name]);
 
   const pollJob = async (jobId: string) => {
-    for (let i = 0; i < 600; i++) {
+    let lastDone = -1;
+    for (let i = 0; i < 1200; i++) {
       const j = await getVisualJob(projectId, jobId);
+      const done = Number(j.progress_done || 0);
+      const total = Number(j.progress_total || 0);
+      if (total > 0) {
+        setJobProgress({ done, total });
+      }
+      // Refresh gallery as soon as each new image is written on disk.
+      if (done !== lastDone && (j.status === "running" || j.status === "succeeded")) {
+        lastDone = done;
+        try {
+          await refresh();
+        } catch {
+          /* keep polling even if refresh fails once */
+        }
+      }
       if (j.status === "succeeded" || j.status === "failed") return j;
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error("visual job timeout");
   };
@@ -138,6 +165,7 @@ export function VisualPage({ projectId }: Props) {
   const runVisualJob = async (start: () => Promise<{ id: string }>) => {
     setBusy(true);
     setError(null);
+    setJobProgress(null);
     try {
       const job = await start();
       const done = await pollJob(job.id);
@@ -147,6 +175,7 @@ export function VisualPage({ projectId }: Props) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+      setJobProgress(null);
     }
   };
 
@@ -158,13 +187,15 @@ export function VisualPage({ projectId }: Props) {
       }),
     );
 
-  const onCandidatesBatch = () =>
+  const onCandidatesBatch = () => {
+    const n = Math.max(1, Math.min(100, Math.floor(Number(batchCount) || 8)));
     void runVisualJob(() =>
       startVisualCandidates(projectId, {
         character_ids: activeId ? [activeId] : undefined,
-        count: 8,
+        count: n,
       }),
     );
+  };
 
   const onTurnaroundOnce = (slotKey: string) => {
     if (!active) return;
@@ -425,6 +456,11 @@ export function VisualPage({ projectId }: Props) {
                 {active.probe_status || "not_started"}
                 {active.lora_ready ? " · lora_ready" : ""}
               </p>
+              {jobProgress && (
+                <p className="note" role="status">
+                  正在出图 {jobProgress.done}/{jobProgress.total}（每完成一张会立刻出现在下方）
+                </p>
+              )}
               <p className="bible-plain">{active.prompt_zh || "（无 prompt_zh）"}</p>
 
               <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
@@ -497,7 +533,7 @@ export function VisualPage({ projectId }: Props) {
               )}
 
               <h4 style={{ marginBottom: 0 }}>候选图</h4>
-              <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+              <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                 <button
                   type="button"
                   className="btn btn-primary"
@@ -506,14 +542,31 @@ export function VisualPage({ projectId }: Props) {
                 >
                   单次生成候选
                 </button>
+                <label className="field" style={{ margin: 0, minWidth: 88 }}>
+                  批量数量
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={batchCount}
+                    disabled={busy}
+                    aria-label="batch-count"
+                    onChange={(e) => setBatchCount(Number(e.target.value) || 1)}
+                  />
+                </label>
                 <button
                   type="button"
                   className="btn btn-primary"
                   disabled={busy}
                   onClick={onCandidatesBatch}
                 >
-                  批量生成候选（8）
+                  批量生成候选（{Math.max(1, Math.min(100, Math.floor(Number(batchCount) || 8))}）
                 </button>
+                {jobProgress && (
+                  <span className="note" style={{ margin: 0 }}>
+                    生成中 {jobProgress.done}/{jobProgress.total}
+                  </span>
+                )}
               </div>
               <div className="bible-cards visual-thumbs" aria-label="candidate-grid">
                 {active.candidates.map((name) =>
