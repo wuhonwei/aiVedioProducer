@@ -169,13 +169,14 @@ def _view_lock_negative(slot_key: str | None) -> str:
         )
     if key == "turnaround_side":
         return (
-            "front view, facing viewer, looking at viewer, "
-            "back view, from behind, rear view, three-quarter view"
+            "front view, facing viewer, looking at viewer, face to camera, "
+            "chest toward camera, three-quarter view, back view, from behind, "
+            "rear view, symmetrical front portrait"
         )
     if key == "turnaround_back":
         return (
-            "face, facial features, looking at viewer, front view, "
-            "eyes visible, smile, portrait, facing camera"
+            "face, facial features, eyes, nose, mouth, looking at viewer, "
+            "front view, facing camera, portrait, side profile, three-quarter view"
         )
     return ""
 
@@ -210,20 +211,23 @@ TURNAROUND_SLOTS: list[tuple[str, str, str]] = [
     (
         "turnaround_front",
         "三视图正面",
-        f"{_TURNAROUND_BASE}, front view, facing viewer, looking at viewer, "
-        "face fully visible, chest toward camera",
+        "front view, facing viewer, looking at viewer, face fully visible, "
+        f"chest toward camera, {_TURNAROUND_BASE}",
     ),
     (
         "turnaround_side",
         "三视图侧面",
-        f"{_TURNAROUND_BASE}, strict side profile view, from the side, "
-        "head in profile, one ear visible, body parallel to camera",
+        "STRICT side view only, 90-degree side profile, from the side, "
+        "head in profile, one ear visible, nose pointing left or right, "
+        "body parallel to camera, no front face, "
+        f"{_TURNAROUND_BASE}",
     ),
     (
         "turnaround_back",
         "三视图背面",
-        f"{_TURNAROUND_BASE}, rear view, from behind, back of head, "
-        "facing away from viewer, no face visible, back of outfit visible",
+        "STRICT rear view only, from behind, back of head, facing away, "
+        "no face visible, no eyes, back of outfit visible, "
+        f"{_TURNAROUND_BASE}",
     ),
 ]
 

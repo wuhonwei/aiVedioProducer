@@ -45,6 +45,12 @@ def sheet_denoise_for(slot_key: str, base: float) -> float:
     return clamp_denoise(base)
 
 
+def sheet_uses_look_lock_image(slot_key: str) -> bool:
+    """Side/back must NOT img2img from a front look-lock, or pose stays front-facing."""
+    key = (slot_key or "").lower()
+    return key not in {"turnaround_side", "turnaround_back"}
+
+
 def look_lock_dir(vpaths: VisualPaths, character_id: str) -> Path:
     return vpaths.character_dir(character_id) / "look_lock"
 

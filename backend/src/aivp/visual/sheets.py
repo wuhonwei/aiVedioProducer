@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from aivp.visual.image_backend import ImageBackend, fresh_seed
-from aivp.visual.look_lock import resolve_look_lock, sheet_denoise_for
+from aivp.visual.look_lock import (
+    resolve_look_lock,
+    sheet_denoise_for,
+    sheet_uses_look_lock_image,
+)
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile
 from aivp.visual.prompts import (
@@ -101,13 +105,20 @@ def generate_character_sheets(
             gender_presentation=str(profile.get("gender_presentation") or ""),
             profile=profile,
         )
-        if ref_image:
+        # Side/back: do NOT seed from a front look-lock image (pose stays front).
+        use_ref = ref_image if (ref_image and sheet_uses_look_lock_image(key)) else None
+        if use_ref:
             prompt = (
                 f"{prompt}, same character identity hairstyle and outfit as reference, "
                 "change pose camera angle and expression, not a copy of the reference photo"
             )
+        elif ref_image and key in {"turnaround_side", "turnaround_back"}:
+            prompt = (
+                f"{prompt}, same character identity hairstyle and outfit as the locked look, "
+                "exact requested camera angle only"
+            )
         dest = out_dir / _unique_sheet_name(key)
-        denoise = sheet_denoise_for(key, base_denoise) if ref_image else 1.0
+        denoise = sheet_denoise_for(key, base_denoise) if use_ref else 1.0
         backend.generate(
             prompt=prompt,
             negative=sheet_negative_for(
@@ -121,7 +132,7 @@ def generate_character_sheets(
             height=1024,
             lora_name=lora,
             lora_strength=0.75,
-            ref_image=ref_image,
+            ref_image=use_ref,
             denoise=denoise,
         )
         meta = {
@@ -130,7 +141,8 @@ def generate_character_sheets(
             "file": dest.name,
             "prompt": prompt,
             "for_lora": True,
-            "look_lock": bool(ref_image),
+            "look_lock": bool(use_ref),
+            "look_lock_identity_only": bool(ref_image and not use_ref),
             "denoise": denoise,
         }
         dest.with_suffix(".meta.json").write_text(

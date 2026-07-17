@@ -142,6 +142,21 @@ def test_visual_sheets_and_delete_api(tmp_path: Path):
     assert missing.status_code == 404
 
 
+def test_turnaround_side_back_skip_front_look_lock_image():
+    from aivp.visual.look_lock import sheet_uses_look_lock_image
+
+    assert sheet_uses_look_lock_image("turnaround_front") is True
+    assert sheet_uses_look_lock_image("expr_calm") is True
+    assert sheet_uses_look_lock_image("turnaround_side") is False
+    assert sheet_uses_look_lock_image("turnaround_back") is False
+    for key, _label, framing in TURNAROUND_SLOTS:
+        if key == "turnaround_side":
+            assert "side" in framing.lower()
+            assert framing.lower().startswith("strict side") or "STRICT side" in framing
+        if key == "turnaround_back":
+            assert "rear" in framing.lower() or "behind" in framing.lower()
+
+
 def test_probe_framing_mentions_person():
     assert "1person" in PROBE_FRAMING
     assert "人物半身特写" in PROBE_FRAMING
