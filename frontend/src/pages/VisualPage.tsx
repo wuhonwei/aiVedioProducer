@@ -560,7 +560,9 @@ export function VisualPage({ projectId }: Props) {
                   disabled={busy}
                   onClick={onCandidatesBatch}
                 >
-                  批量生成候选（{Math.max(1, Math.min(100, Math.floor(Number(batchCount) || 8))}）
+                  批量生成候选（
+                  {Math.max(1, Math.min(100, Math.floor(Number(batchCount) || 8)))}
+                  ）
                 </button>
                 {jobProgress && (
                   <span className="note" style={{ margin: 0 }}>
