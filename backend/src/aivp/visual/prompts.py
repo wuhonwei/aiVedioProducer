@@ -172,33 +172,47 @@ def gender_lock_positive(
         if elder:
             return "1boy, solo, male, elderly man, mature masculine face"
         if mid:
-            return "1boy, solo, male, middle-aged man, mature masculine face, adult man"
+            return (
+                "1boy, solo, male, middle-aged man, mature masculine face, adult man, "
+                "not a teenager, not a young boy"
+            )
         return "1boy, solo, male, masculine face, young adult man"
     if gender == "female":
         if elder:
             return "1girl, solo, female, elderly woman, mature feminine face"
         if mid:
-            return "1girl, solo, female, middle-aged woman, mature feminine face, adult woman"
+            return (
+                "1girl, solo, female, middle-aged woman, mature feminine face, adult woman, "
+                "not a teenager"
+            )
         return "1girl, solo, female, feminine face, young adult woman"
     return "solo, 1person"
 
 
-def gender_lock_negative(gender_presentation: str | None) -> str:
+def gender_lock_negative(gender_presentation: str | None, *, age_look: str | None = None) -> str:
     """Extra negatives to reduce cross-gender drift on Guofeng priors."""
     g = normalize_gender(gender_presentation)
+    parts: list[str] = []
     if g == "male":
-        return (
+        parts.append(
             "1girl, woman, female, girl, feminine face, breasts, "
             "lipstick, long eyelashes, makeup"
         )
-    if g == "female":
-        return "1boy, man, male, boy, masculine face, beard, adam's apple"
-    return ""
+    elif g == "female":
+        parts.append("1boy, man, male, boy, masculine face, beard, adam's apple")
+    age_blob = age_look or ""
+    if any(k in age_blob for k in ("中年", "壮年", "mature", "middle")):
+        parts.append("teenager, teen boy, young boy, child, kid, baby face, shota")
+    return ", ".join(parts)
 
 
-def character_negative_for(gender_presentation: str | None = None) -> str:
+def character_negative_for(
+    gender_presentation: str | None = None,
+    *,
+    age_look: str | None = None,
+) -> str:
     parts = [CHARACTER_NEGATIVE, _OUTFIT_DRIFT_NEGATIVE]
-    extra = gender_lock_negative(gender_presentation)
+    extra = gender_lock_negative(gender_presentation, age_look=age_look)
     if extra:
         parts.append(extra)
     return ", ".join(parts)
@@ -209,7 +223,27 @@ def candidate_negative_for(profile: dict) -> str:
         profile.get("gender_presentation"),
         text_hints=f"{profile.get('prompt_zh') or ''} {profile.get('name') or ''}",
     )
-    return character_negative_for(gender)
+    return character_negative_for(gender, age_look=str(profile.get("age_look") or ""))
+
+
+def sheet_negative_for(
+    gender_presentation: str | None = None,
+    *,
+    slot_key: str | None = None,
+    text_hints: str = "",
+    age_look: str | None = None,
+) -> str:
+    gender = normalize_gender(gender_presentation, text_hints=text_hints)
+    key = (slot_key or "").strip().lower()
+    base = EXPRESSION_NEGATIVE if key.startswith("expr_") else CHARACTER_NEGATIVE
+    parts = [base, TURNAROUND_MULTI_NEGATIVE, _OUTFIT_DRIFT_NEGATIVE]
+    gneg = gender_lock_negative(gender, age_look=age_look or text_hints)
+    if gneg:
+        parts.append(gneg)
+    view = _view_lock_negative(slot_key)
+    if view:
+        parts.append(view)
+    return ", ".join(parts)
 
 
 def appearance_lock_tokens(profile: dict) -> list[str]:
@@ -305,25 +339,6 @@ def _view_lock_negative(slot_key: str | None) -> str:
             "upper body only, close-up, cropped feet, cropped legs"
         )
     return ""
-
-
-def sheet_negative_for(
-    gender_presentation: str | None = None,
-    *,
-    slot_key: str | None = None,
-    text_hints: str = "",
-) -> str:
-    gender = normalize_gender(gender_presentation, text_hints=text_hints)
-    key = (slot_key or "").strip().lower()
-    base = EXPRESSION_NEGATIVE if key.startswith("expr_") else CHARACTER_NEGATIVE
-    parts = [base, TURNAROUND_MULTI_NEGATIVE, _OUTFIT_DRIFT_NEGATIVE]
-    gneg = gender_lock_negative(gender)
-    if gneg:
-        parts.append(gneg)
-    view = _view_lock_negative(slot_key)
-    if view:
-        parts.append(view)
-    return ", ".join(parts)
 
 
 # Avoid the phrase "turnaround sheet" — it pulls multi-figure reference plates.
