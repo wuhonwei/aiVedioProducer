@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     image_backend: str = "stub"  # stub | comfy
     comfy_base_url: str = "http://127.0.0.1:8188"
     comfy_checkpoint: str = ""
+    comfy_timeout_sec: float = 180.0
     lora_train_cmd: str = ""
     visual_candidate_count: int = 8
     ollama_vision_model: str = "qwen2.5vl:7b"

@@ -358,7 +358,7 @@ class ComfyImageBackend:
 
         dest.parent.mkdir(parents=True, exist_ok=True)
 
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=httpx.Timeout(45.0, connect=5.0)) as client:
             if use_img2img:
                 uploaded_name = self._upload_image(client, Path(ref_image))
                 workflow = build_sdxl_img2img_workflow(
@@ -426,17 +426,36 @@ class ComfyImageBackend:
 
             deadline = time.monotonic() + self.timeout_sec
             history_entry: dict[str, Any] | None = None
-            while time.monotonic() < deadline:
-                hist = client.get(f"{self.base_url}/history/{prompt_id}")
-                if hist.status_code == 200:
-                    payload = hist.json() or {}
-                    entry = payload.get(prompt_id)
-                    if entry and entry.get("outputs"):
-                        history_entry = entry
-                        break
-                time.sleep(self.poll_interval_sec)
-            if history_entry is None:
-                raise RuntimeError(f"comfy_generate_timeout:{prompt_id}")
+            try:
+                while time.monotonic() < deadline:
+                    hist = client.get(
+                        f"{self.base_url}/history/{prompt_id}",
+                        timeout=10.0,
+                    )
+                    if hist.status_code == 200:
+                        payload = hist.json() or {}
+                        entry = payload.get(prompt_id)
+                        if isinstance(entry, dict):
+                            fail = _history_failure_message(entry, prompt_id)
+                            if fail:
+                                raise RuntimeError(fail)
+                            if _first_output_images(entry):
+                                history_entry = entry
+                                break
+                    time.sleep(self.poll_interval_sec)
+                if history_entry is None:
+                    self._interrupt(client)
+                    raise RuntimeError(
+                        f"comfy_generate_timeout:{prompt_id}:"
+                        f"waited_{int(self.timeout_sec)}s_without_output"
+                    )
+            except Exception:
+                # Best-effort clear a wedged Comfy prompt so the next image can run.
+                try:
+                    self._interrupt(client)
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
 
             images = _first_output_images(history_entry)
             if not images:
@@ -500,6 +519,35 @@ class ComfyImageBackend:
         name = body.get("name") if isinstance(body, dict) else None
         return str(name or upload_name)
 
+    def _interrupt(self, client: httpx.Client) -> None:
+        """Ask Comfy to stop the current / queued prompt (best-effort)."""
+        try:
+            client.post(f"{self.base_url}/interrupt", json={})
+        except httpx.HTTPError:
+            pass
+        try:
+            client.post(f"{self.base_url}/queue", json={"clear": True})
+        except httpx.HTTPError:
+            pass
+
+
+def _history_failure_message(entry: dict[str, Any], prompt_id: str) -> str | None:
+    """Return error text when Comfy finished without usable images."""
+    status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+    status_str = str(status.get("status_str") or "").lower()
+    completed = bool(status.get("completed"))
+    has_images = bool(_first_output_images(entry))
+    if status_str in {"error", "failed", "interrupted"}:
+        messages = status.get("messages") or []
+        detail = ""
+        if isinstance(messages, list) and messages:
+            detail = str(messages[0])[:300]
+        return f"comfy_prompt_{status_str}:{prompt_id}:{detail}"
+    # Completed but no SaveImage outputs — common after OOM / node crash.
+    if completed and not has_images:
+        return f"comfy_prompt_completed_without_images:{prompt_id}"
+    return None
+
 
 def _first_output_images(history_entry: dict[str, Any]) -> list[dict[str, Any]]:
     outputs = history_entry.get("outputs") or {}
@@ -516,5 +564,6 @@ def get_image_backend(settings) -> ImageBackend:
         return ComfyImageBackend(
             getattr(settings, "comfy_base_url", "http://127.0.0.1:8188"),
             checkpoint=getattr(settings, "comfy_checkpoint", "") or "",
+            timeout_sec=float(getattr(settings, "comfy_timeout_sec", 180.0) or 180.0),
         )
     return StubImageBackend()

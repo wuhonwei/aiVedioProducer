@@ -116,17 +116,23 @@ def generate_candidates_for_character(
             )
         name = f"{batch}_{i+1:03d}.png"
         dest = out_dir / name
-        backend.generate(
-            prompt=prompt,
-            negative=neg,
-            dest=dest,
-            seed=(seed_base + i) % (2_147_483_647 + 1),
-            width=768,
-            height=1024,
-            ref_image=ref_image,
-            denoise=denoise,
-            cfg=cfg,
-        )
+        # Show completed count before this image so UI reads "正在生成第 i+1/n".
+        if on_progress:
+            on_progress(len(created), n)
+        try:
+            backend.generate(
+                prompt=prompt,
+                negative=neg,
+                dest=dest,
+                seed=(seed_base + i) % (2_147_483_647 + 1),
+                width=768,
+                height=1024,
+                ref_image=ref_image,
+                denoise=denoise,
+                cfg=cfg,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"candidate_{i + 1}_of_{n}_failed:{exc}") from exc
         dest.with_suffix(".txt").write_text(prompt, encoding="utf-8")
         created.append(dest.name)
         if on_progress:

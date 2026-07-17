@@ -179,6 +179,10 @@ def start_candidates(
             def on_progress(done: int, total: int) -> None:
                 data["progress_done"] = done
                 data["progress_total"] = total
+                if total > 0 and done < total:
+                    data["progress_note"] = f"正在生成第 {done + 1}/{total} 张"
+                elif total > 0:
+                    data["progress_note"] = f"已完成 {done}/{total}"
                 _write_job(path, data)
 
             result = generate_candidates(
@@ -190,11 +194,13 @@ def start_candidates(
                 on_progress=on_progress,
             )
             data["status"] = "succeeded"
+            data["progress_note"] = None
             data["result"] = result
             _write_job(path, data)
         except Exception as e:  # noqa: BLE001
             data["status"] = "failed"
             data["error"] = str(e)
+            data["progress_note"] = None
             _write_job(path, data)
 
     if getattr(request.app.state, "run_jobs_inline", False):

@@ -68,9 +68,11 @@ export function VisualPage({ projectId }: Props) {
   const [lightbox, setLightbox] = useState<Lightbox>(null);
   const [batchCount, setBatchCount] = useState(8);
   const [lookLockDenoise, setLookLockDenoise] = useState(0.55);
-  const [jobProgress, setJobProgress] = useState<{ done: number; total: number } | null>(
-    null,
-  );
+  const [jobProgress, setJobProgress] = useState<{
+    done: number;
+    total: number;
+    note?: string | null;
+  } | null>(null);
   const [trainCheck, setTrainCheck] = useState<{
     can_train: boolean;
     score: number;
@@ -147,8 +149,17 @@ export function VisualPage({ projectId }: Props) {
       const j = await getVisualJob(projectId, jobId);
       const done = Number(j.progress_done || 0);
       const total = Number(j.progress_total || 0);
+      const note = typeof j.progress_note === "string" ? j.progress_note : null;
       if (total > 0) {
-        setJobProgress({ done, total });
+        setJobProgress({
+          done,
+          total,
+          note:
+            note ||
+            (done < total
+              ? `正在生成第 ${done + 1}/${total} 张（已完成 ${done}）`
+              : `已完成 ${done}/${total}`),
+        });
       }
       // Refresh gallery as soon as each new image is written on disk.
       if (done !== lastDone && (j.status === "running" || j.status === "succeeded")) {
@@ -520,7 +531,9 @@ export function VisualPage({ projectId }: Props) {
               </p>
               {jobProgress && (
                 <p className="note" role="status">
-                  正在出图 {jobProgress.done}/{jobProgress.total}（每完成一张会立刻出现在下方）
+                  {jobProgress.note ||
+                    `正在出图 ${jobProgress.done}/${jobProgress.total}`}
+                  （每完成一张会立刻出现在下方）
                 </p>
               )}
               <p className="bible-plain">{active.prompt_zh || "（无 prompt_zh）"}</p>

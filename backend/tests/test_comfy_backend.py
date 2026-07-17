@@ -48,7 +48,7 @@ def test_comfy_generate_downloads_image(tmp_path: Path, monkeypatch):
         def __exit__(self, *args):
             return False
 
-        def get(self, url, params=None):
+        def get(self, url, params=None, **kwargs):
             if url.endswith("/system_stats"):
                 return FakeResponse(200, {})
             if "/history/" in url:
@@ -88,6 +88,29 @@ def test_comfy_generate_downloads_image(tmp_path: Path, monkeypatch):
     assert calls["n"] == 1
 
 
+def test_history_failure_detects_error_status():
+    from aivp.visual.image_backend import _history_failure_message
+
+    err = _history_failure_message(
+        {"status": {"status_str": "error", "completed": True, "messages": [["exec", "oom"]]}, "outputs": {}},
+        "pid-x",
+    )
+    assert err and "error" in err
+    ok = _history_failure_message(
+        {
+            "status": {"status_str": "success", "completed": True},
+            "outputs": {"9": {"images": [{"filename": "a.png"}]}},
+        },
+        "pid-y",
+    )
+    assert ok is None
+    empty = _history_failure_message(
+        {"status": {"status_str": "success", "completed": True}, "outputs": {}},
+        "pid-z",
+    )
+    assert empty and "without_images" in empty
+
+
 def test_comfy_requires_checkpoint(tmp_path: Path, monkeypatch):
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -99,7 +122,7 @@ def test_comfy_requires_checkpoint(tmp_path: Path, monkeypatch):
         def __exit__(self, *args):
             return False
 
-        def get(self, url, params=None):
+        def get(self, url, params=None, **kwargs):
             return type("R", (), {"status_code": 200})()
 
     monkeypatch.setattr(httpx, "Client", FakeClient)
