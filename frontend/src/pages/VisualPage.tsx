@@ -66,6 +66,7 @@ export function VisualPage({ projectId }: Props) {
   const [probePrompt, setProbePrompt] = useState("");
   const [probeResult, setProbeResult] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Lightbox>(null);
+  const [batchCount, setBatchCount] = useState(8);
   const [lookLockDenoise, setLookLockDenoise] = useState(0.62);
   const [jobProgress, setJobProgress] = useState<{ done: number; total: number } | null>(
     null,
