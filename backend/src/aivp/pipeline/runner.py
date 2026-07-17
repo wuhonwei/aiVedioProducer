@@ -95,9 +95,18 @@ def run_job(
             session.add(JobStep(job_id=job.id, step=step, status="running"))
             session.commit()
             if step == "01_clean":
-                run_clean(paths.source_txt, paths.clean_txt)
+                run_clean(
+                    paths.source_txt,
+                    paths.clean_txt,
+                    metadata_json=paths.metadata_json,
+                    clean_report_json=paths.clean_report_json,
+                )
             elif step == "02_chapters":
-                run_chapter_split(paths.clean_txt, paths.chapters_json)
+                run_chapter_split(
+                    paths.clean_txt,
+                    paths.chapters_json,
+                    report_json=paths.chapter_report_json,
+                )
                 volumes = run_plan_volumes(
                     paths.chapters_json,
                     paths.volumes_json,
@@ -145,6 +154,7 @@ def run_job(
                         paths.chunks_jsonl,
                         settings.chunk_size,
                         settings.chunk_overlap,
+                        report_json=paths.chunk_report_json,
                     )
                 job.chunks_total = len(chunks)
                 job.chunks_done = 0
@@ -172,6 +182,8 @@ def run_job(
                     on_progress=_on_extract_progress,
                     workers=settings.extract_workers,
                     progress_every=settings.extract_progress_every,
+                    report_json=paths.extract_report_json,
+                    errors_json=paths.extract_errors_json,
                 )
                 job.chunks_done = result["done"]
                 job.chunks_total = result["total"]

@@ -26,10 +26,65 @@ def test_coerce_accepts_messy_ollama_shapes():
     model = ChunkExtract.model_validate(coerced)
     assert model.characters[0].name == "林砚之"
     assert model.props[0].name == "玉佩"
-    assert model.events[0]["summary"] == "林砚之抵达渡口"
-    assert model.events[1]["summary"] == "雾锁青川渡"
+    assert model.events[0].summary == "林砚之抵达渡口"
+    assert model.events[1].summary == "雾锁青川渡"
     assert "湿冷白雾" in model.visual_cues
     assert model.adaptation_notes[0] == "开场长镜头"
+    assert model.visual_candidates
+    assert model.visual_candidates[0].scene == "湿冷白雾"
+
+
+def test_character_mention_and_event_fact_fields():
+    raw = {
+        "characters": [
+            {
+                "name": "林澈",
+                "aliases": ["林捕快"],
+                "appearance": [{"fact": "青衫", "evidence": "他穿青衫"}],
+                "personality": ["沉稳"],
+                "actions": ["拔刀"],
+                "emotion": "警惕",
+                "evidence": "林澈拔刀警戒",
+            }
+        ],
+        "locations": [
+            {
+                "name": "破庙",
+                "description": "雨夜破庙",
+                "atmosphere": "阴冷",
+                "evidence": "破庙漏雨",
+            }
+        ],
+        "events": [
+            {
+                "summary": "追踪血迹",
+                "participants": ["林澈"],
+                "location": "破庙",
+                "time_hint": "雨夜",
+                "cause": "追杀",
+                "result": "进入破庙",
+                "importance": 0.8,
+                "visual_score": 0.9,
+                "evidence": "血迹延到庙门",
+            }
+        ],
+        "visual_candidates": [
+            {
+                "scene": "庙门血迹",
+                "visual_score": 0.9,
+                "reason": "强视觉",
+                "suggested_shots": ["特写"],
+                "evidence": "血迹延到庙门",
+            }
+        ],
+    }
+    model = ChunkExtract.model_validate(coerce_extract(raw))
+    assert model.characters[0].appearance[0].fact == "青衫"
+    assert model.characters[0].actions == ["拔刀"]
+    assert model.locations[0].atmosphere == "阴冷"
+    assert model.events[0].cause == "追杀"
+    assert model.events[0].visual_score == 0.9
+    assert model.visual_candidates[0].suggested_shots == ["特写"]
 
 
 def test_extract_chunk_coerces_before_validate():

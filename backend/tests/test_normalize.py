@@ -16,8 +16,34 @@ def test_normalize_merges_aliases():
     assert entities["characters"][0]["merge_history"]
 
 
+def test_normalize_sources_and_first_appearance():
+    extracts = [
+        {
+            "_chapter_id": "chapter_0001",
+            "_chunk_id": "0001",
+            "characters": [{"name": "林澈", "aliases": []}],
+            "locations": [],
+            "factions": [],
+            "props": [],
+        },
+        {
+            "_chapter_id": "chapter_0002",
+            "_chunk_id": "0001",
+            "characters": [{"name": "林澈", "aliases": ["林捕快"]}],
+            "locations": [],
+            "factions": [],
+            "props": [],
+        },
+    ]
+    result = normalize_entities(extracts)
+    char = result["entities"]["characters"][0]
+    assert char["first_appearance"] == "chapter_0001"
+    assert "chapter_0001_chunk_0001" in char["sources"]
+    assert "chapter_0002_chunk_0001" in char["sources"]
+
+
 def test_normalize_writes_uncertain_report(tmp_path: Path):
-    extract_dir = tmp_path / "04_extract" / "ch001"
+    extract_dir = tmp_path / "04_extract" / "chapter_0001"
     extract_dir.mkdir(parents=True)
     (extract_dir / "0001.json").write_text(
         json.dumps(
@@ -39,3 +65,7 @@ def test_normalize_writes_uncertain_report(tmp_path: Path):
     assert out.exists()
     assert (out.parent / "normalize_report.json").exists()
     assert (out.parent / "uncertain_entities.json").exists()
+    assert (out.parent / "candidate_pairs.json").exists()
+    entities = json.loads(out.read_text(encoding="utf-8"))
+    assert entities["characters"][0]["sources"]
+    assert entities["characters"][0]["first_appearance"] == "chapter_0001"

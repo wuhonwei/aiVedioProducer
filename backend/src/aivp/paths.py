@@ -11,6 +11,8 @@ class ProjectPaths:
         self.source_txt = self.raw_dir / "source.txt"
         self.clean_txt = self.stages_dir / "01_clean" / "cleaned.txt"
         self.clean_metadata_json = self.stages_dir / "01_clean" / "metadata.json"
+        # Alias used by the Phase-1 reliability plan / callers.
+        self.metadata_json = self.clean_metadata_json
         self.clean_report_json = self.stages_dir / "01_clean" / "clean_report.json"
         self.chapters_json = self.stages_dir / "02_chapters" / "chapters.json"
         self.chapter_report_json = self.stages_dir / "02_chapters" / "chapter_report.json"

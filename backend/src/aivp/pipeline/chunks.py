@@ -16,8 +16,8 @@ def chunk_chapters(chapters: list[dict], size: int = 4000, overlap: int = 500) -
         )
         # Body starts after heading inside chapter block; chapter text is body-only.
         body_base = int(ch.get("heading_end_offset", chapter_base + heading_len))
-        # Skip whitespace between heading and body in original file approximations:
-        # use chapter start_offset + (heading width) when available; else 0-based in body.
+        chapter_id = ch.get("chapter_id") or ch["id"]
+        legacy_chapter_id = ch.get("legacy_id") or ch.get("id")
         start = 0
         idx = 1
         while start < len(text):
@@ -28,8 +28,9 @@ def chunk_chapters(chapters: list[dict], size: int = 4000, overlap: int = 500) -
             out.append(
                 {
                     "id": f"{idx:04d}",
-                    "chunk_id": f"{ch['id']}_chunk_{idx:04d}",
-                    "chapter_id": ch["id"],
+                    "chunk_id": f"{chapter_id}_chunk_{idx:04d}",
+                    "chapter_id": chapter_id,
+                    "legacy_chapter_id": legacy_chapter_id,
                     "chapter_index": ch.get("index", 0),
                     "chapter_title": ch["title"],
                     "index": idx,
@@ -88,14 +89,22 @@ def chunk_report(
     }
 
 
-def run_chunk(chapters_json: Path, out_jsonl: Path, size: int, overlap: int) -> list[dict]:
+def run_chunk(
+    chapters_json: Path,
+    out_jsonl: Path,
+    size: int,
+    overlap: int,
+    *,
+    report_json: Path | None = None,
+) -> list[dict]:
     chapters = json.loads(chapters_json.read_text(encoding="utf-8"))
     chunks = chunk_chapters(chapters, size=size, overlap=overlap)
     out_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with out_jsonl.open("w", encoding="utf-8") as f:
         for c in chunks:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
-    report_path = out_jsonl.parent / "chunk_report.json"
+    report_path = report_json or (out_jsonl.parent / "chunk_report.json")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
         json.dumps(chunk_report(chunks, size, overlap), ensure_ascii=False, indent=2),
         encoding="utf-8",

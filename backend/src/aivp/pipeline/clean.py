@@ -16,7 +16,9 @@ def clean_text(text: str) -> tuple[str, dict]:
     removed_lines = 0
     removed_ad_lines = 0
     removed_url_lines = 0
-    if text.startswith("\ufeff"):
+    bom_removed = text.startswith("\ufeff")
+    removed_samples: list[str] = []
+    if bom_removed:
         text = text.lstrip("\ufeff")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = "".join(ch for ch in text if ch == "\n" or ch == "\t" or ord(ch) >= 32)
@@ -34,10 +36,14 @@ def clean_text(text: str) -> tuple[str, dict]:
         if is_url:
             removed_lines += 1
             removed_url_lines += 1
+            if len(removed_samples) < 20:
+                removed_samples.append(stripped[:120])
             continue
         if is_ad and len(stripped) < 120:
             removed_lines += 1
             removed_ad_lines += 1
+            if len(removed_samples) < 20:
+                removed_samples.append(stripped[:120])
             continue
         kept.append(line)
     text = "\n".join(kept)
@@ -46,16 +52,25 @@ def clean_text(text: str) -> tuple[str, dict]:
     if text and not text.endswith("\n"):
         text += "\n"
     report = {
+        "normalized_newlines": True,
+        "bom_removed": bom_removed,
         "removed_lines": removed_lines,
         "removed_ad_lines": removed_ad_lines,
         "removed_url_lines": removed_url_lines,
-        "normalized_newlines": True,
+        "removed_samples": removed_samples,
+        "suspicious_lines": [],
         "warnings": [],
     }
     return text, report
 
 
-def run_clean(source: Path, dest: Path) -> Path:
+def run_clean(
+    source: Path,
+    dest: Path,
+    *,
+    metadata_json: Path | None = None,
+    clean_report_json: Path | None = None,
+) -> Path:
     raw = source.read_bytes()
     detected = None
     text = None
@@ -82,10 +97,10 @@ def run_clean(source: Path, dest: Path) -> Path:
         "language": "zh-CN",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    (dest.parent / "metadata.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (dest.parent / "clean_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    meta_path = metadata_json or (dest.parent / "metadata.json")
+    report_path = clean_report_json or (dest.parent / "clean_report.json")
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return dest

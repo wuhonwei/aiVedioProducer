@@ -12,6 +12,59 @@ def _text(value: Any) -> str:
     return str(value).strip()
 
 
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _aliases(item: dict[str, Any], name: str) -> list[str]:
+    aliases_raw = item.get("aliases") or []
+    aliases: list[str] = []
+    if isinstance(aliases_raw, list):
+        for a in aliases_raw:
+            t = _text(a)
+            if t and t != name and t not in aliases:
+                aliases.append(t)
+    return aliases
+
+
+def _entity_name(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        t = _text(item.get(key))
+        if t:
+            return t
+    return ""
+
+
+def _evidence_facts(items: Any) -> list[dict[str, Any]]:
+    if not isinstance(items, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, str):
+            fact = item.strip()
+            if fact:
+                out.append({"fact": fact, "evidence": "", "confidence": None})
+            continue
+        if not isinstance(item, dict):
+            continue
+        fact = _text(item.get("fact") or item.get("text") or item.get("description"))
+        if not fact:
+            continue
+        out.append(
+            {
+                "fact": fact,
+                "evidence": _text(item.get("evidence")),
+                "confidence": _float_or_none(item.get("confidence")),
+            }
+        )
+    return out
+
+
 def _named_entity(item: Any) -> dict[str, Any] | None:
     if isinstance(item, str):
         name = item.strip()
@@ -23,31 +76,77 @@ def _named_entity(item: Any) -> dict[str, Any] | None:
         } if name else None
     if not isinstance(item, dict):
         return None
-    name = _text(
-        item.get("name")
-        or item.get("item")
-        or item.get("title")
-        or item.get("object")
-        or item.get("cue")
-        or item.get("character")
-        or item.get("location")
-        or item.get("faction")
-        or item.get("prop")
+    name = _entity_name(
+        item,
+        "name",
+        "item",
+        "title",
+        "object",
+        "cue",
+        "character",
+        "location",
+        "faction",
+        "prop",
     )
     if not name:
         return None
-    aliases_raw = item.get("aliases") or []
-    aliases: list[str] = []
-    if isinstance(aliases_raw, list):
-        for a in aliases_raw:
-            t = _text(a)
-            if t and t != name and t not in aliases:
-                aliases.append(t)
     return {
         "name": name,
-        "aliases": aliases,
+        "aliases": _aliases(item, name),
         "evidence": _text(item.get("evidence")),
         "identity_hint": _text(item.get("identity_hint")),
+    }
+
+
+def _character_mention(item: Any) -> dict[str, Any] | None:
+    base = _named_entity(item)
+    if not base:
+        return None
+    if isinstance(item, str):
+        return {
+            **base,
+            "appearance": [],
+            "personality": [],
+            "actions": [],
+            "emotion": "",
+        }
+    actions_raw = item.get("actions") or []
+    actions: list[str] = []
+    if isinstance(actions_raw, list):
+        for a in actions_raw:
+            t = _text(a)
+            if t and t not in actions:
+                actions.append(t)
+    return {
+        **base,
+        "appearance": _evidence_facts(item.get("appearance")),
+        "personality": _evidence_facts(item.get("personality")),
+        "actions": actions,
+        "emotion": _text(item.get("emotion")),
+    }
+
+
+def _location_mention(item: Any) -> dict[str, Any] | None:
+    if isinstance(item, str):
+        name = item.strip()
+        return {
+            "name": name,
+            "aliases": [],
+            "description": "",
+            "atmosphere": "",
+            "evidence": "",
+        } if name else None
+    if not isinstance(item, dict):
+        return None
+    name = _entity_name(item, "name", "title", "location", "place")
+    if not name:
+        return None
+    return {
+        "name": name,
+        "aliases": _aliases(item, name),
+        "description": _text(item.get("description")),
+        "atmosphere": _text(item.get("atmosphere")),
+        "evidence": _text(item.get("evidence")),
     }
 
 
@@ -73,7 +172,20 @@ def _string_cue(item: Any) -> str | None:
 def _event(item: Any) -> dict[str, Any] | None:
     if isinstance(item, str):
         summary = item.strip()
-        return {"summary": summary, "evidence": ""} if summary else None
+        if not summary:
+            return None
+        return {
+            "summary": summary,
+            "evidence": "",
+            "participants": [],
+            "location": "",
+            "time_hint": "",
+            "cause": "",
+            "process": "",
+            "result": "",
+            "importance": None,
+            "visual_score": None,
+        }
     if not isinstance(item, dict):
         return None
     summary = _text(
@@ -85,24 +197,22 @@ def _event(item: Any) -> dict[str, Any] | None:
     )
     if not summary:
         return None
-    out: dict[str, Any] = {
+    participants_raw = item.get("participants")
+    participants: list[str] = []
+    if isinstance(participants_raw, list):
+        participants = [_text(x) for x in participants_raw if _text(x)]
+    return {
         "summary": summary,
         "evidence": _text(item.get("evidence")),
+        "participants": participants,
+        "location": _text(item.get("location")),
+        "time_hint": _text(item.get("time_hint") or item.get("story_time_hint")),
+        "cause": _text(item.get("cause")),
+        "process": _text(item.get("process")),
+        "result": _text(item.get("result")),
+        "importance": _float_or_none(item.get("importance")),
+        "visual_score": _float_or_none(item.get("visual_score")),
     }
-    for key in ("type", "location", "time_hint", "cause", "process", "result"):
-        if item.get(key):
-            out[key] = _text(item.get(key))
-    for key in ("participants",):
-        raw = item.get(key)
-        if isinstance(raw, list):
-            out[key] = [_text(x) for x in raw if _text(x)]
-    for key in ("importance", "visual_score"):
-        if key in item:
-            try:
-                out[key] = float(item[key])
-            except (TypeError, ValueError):
-                pass
-    return out
 
 
 def _foreshadow(item: Any) -> dict[str, Any] | None:
@@ -123,13 +233,13 @@ def _foreshadow(item: Any) -> dict[str, Any] | None:
     return {"note": note, "evidence": _text(item.get("evidence"))}
 
 
-def _named_list(items: Any) -> list[dict[str, Any]]:
+def _named_list(items: Any, factory) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         return []
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in items:
-        ent = _named_entity(item)
+        ent = factory(item)
         if not ent:
             continue
         key = ent["name"]
@@ -162,26 +272,34 @@ def _visual_candidates(items: Any) -> list[dict[str, Any]]:
         if isinstance(item, str):
             scene = item.strip()
             if scene:
-                out.append({"scene": scene, "evidence": "", "visual_score": 0.0})
+                out.append(
+                    {
+                        "scene": scene,
+                        "evidence": "",
+                        "visual_score": None,
+                        "reason": "",
+                        "suggested_shots": [],
+                        "difficulty": "",
+                    }
+                )
             continue
         if not isinstance(item, dict):
             continue
         scene = _text(item.get("scene") or item.get("description") or item.get("text"))
         if not scene:
             continue
-        entry: dict[str, Any] = {
-            "scene": scene,
-            "evidence": _text(item.get("evidence")),
-            "reason": _text(item.get("reason")),
-        }
-        try:
-            entry["visual_score"] = float(item.get("visual_score") or 0)
-        except (TypeError, ValueError):
-            entry["visual_score"] = 0.0
         shots = item.get("suggested_shots")
-        if isinstance(shots, list):
-            entry["suggested_shots"] = [_text(s) for s in shots if _text(s)]
-        out.append(entry)
+        suggested = [_text(s) for s in shots if _text(s)] if isinstance(shots, list) else []
+        out.append(
+            {
+                "scene": scene,
+                "evidence": _text(item.get("evidence")),
+                "reason": _text(item.get("reason")),
+                "visual_score": _float_or_none(item.get("visual_score")),
+                "suggested_shots": suggested,
+                "difficulty": _text(item.get("difficulty")),
+            }
+        )
     return out
 
 
@@ -242,17 +360,32 @@ def coerce_extract(raw: Any) -> dict[str, Any]:
         elif isinstance(item, str) and item.strip():
             relationships.append({"note": item.strip()})
 
+    visual_candidates = _visual_candidates(raw.get("visual_candidates") or [])
+    # Map legacy visual_cues into low-structure candidates when none provided.
+    if not visual_candidates:
+        for cue in _string_list(raw.get("visual_cues")):
+            visual_candidates.append(
+                {
+                    "scene": cue,
+                    "evidence": "",
+                    "visual_score": None,
+                    "reason": "from_visual_cues",
+                    "suggested_shots": [],
+                    "difficulty": "",
+                }
+            )
+
     data = {
         "summary": _text(raw.get("summary")),
-        "characters": _named_list(raw.get("characters")),
-        "locations": _named_list(raw.get("locations")),
-        "factions": _named_list(raw.get("factions")),
-        "props": _named_list(raw.get("props")),
+        "characters": _named_list(raw.get("characters"), _character_mention),
+        "locations": _named_list(raw.get("locations"), _location_mention),
+        "factions": _named_list(raw.get("factions"), _named_entity),
+        "props": _named_list(raw.get("props"), _named_entity),
         "events": events,
         "foreshadowing": foreshadowing,
         "relationships": relationships,
         "visual_cues": _string_list(raw.get("visual_cues")),
-        "visual_candidates": _visual_candidates(raw.get("visual_candidates") or []),
+        "visual_candidates": visual_candidates,
         "voice_cues": _string_list(raw.get("voice_cues")),
         "adaptation_notes": _string_list(raw.get("adaptation_notes")),
     }

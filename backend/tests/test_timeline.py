@@ -32,6 +32,10 @@ def test_timeline_orders_by_chapter_then_index():
     assert events[0]["result"] == "见面"
     assert events[0]["evidence"]
     assert events[0]["visual_score"] == 0.9
+    assert events[0]["legacy_chunk_id"] == "0001"
+    assert events[0]["chunk_local_id"] == "0001"
+    assert "story_time_hint" in events[0]
+    assert events[0]["is_flashback"] is False
 
 
 def test_timeline_dedupes_exact_and_whitespace_duplicates():

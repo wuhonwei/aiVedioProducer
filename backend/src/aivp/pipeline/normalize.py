@@ -25,6 +25,14 @@ def _similar(a: str, b: str) -> float:
     return (2.0 * inter) / (len(a2) + len(b2)) if (a2 and b2) else 0.0
 
 
+def _source_id(chapter_id: str, chunk_id: str) -> str:
+    if chapter_id and chunk_id and not str(chunk_id).startswith(str(chapter_id)):
+        # Prefer global chunk id when local id (0001) is provided.
+        if re.fullmatch(r"\d{4}", str(chunk_id)):
+            return f"{chapter_id}_chunk_{chunk_id}"
+    return str(chunk_id or chapter_id or "")
+
+
 def _merge_group(items: list[dict], entity_type: str) -> tuple[list[dict], list[dict]]:
     by_key: dict[str, dict] = {}
     alias_to_canonical: dict[str, str] = {}
@@ -35,6 +43,7 @@ def _merge_group(items: list[dict], entity_type: str) -> tuple[list[dict], list[
         aliases = [a.strip() for a in item.get("aliases", []) if a and str(a).strip()]
         sources = item.get("sources") or []
         evidence = item.get("evidence") or ""
+        first_appearance = item.get("first_appearance") or ""
 
         canon = alias_to_canonical.get(name, name)
         for a in aliases:
@@ -49,6 +58,7 @@ def _merge_group(items: list[dict], entity_type: str) -> tuple[list[dict], list[
                 "name": canon,
                 "aliases": [],
                 "sources": [],
+                "first_appearance": first_appearance or "",
                 "confidence": 0.95,
                 "merge_history": [],
                 "review_status": "auto_merged",
@@ -70,6 +80,8 @@ def _merge_group(items: list[dict], entity_type: str) -> tuple[list[dict], list[
         for s in sources:
             if s and s not in entry["sources"]:
                 entry["sources"].append(s)
+        if first_appearance and not entry.get("first_appearance"):
+            entry["first_appearance"] = first_appearance
         if evidence and not entry.get("evidence"):
             entry["evidence"] = evidence
 
@@ -90,12 +102,20 @@ def _merge_group(items: list[dict], entity_type: str) -> tuple[list[dict], list[
                 if pair in seen_pairs:
                     continue
                 seen_pairs.add(pair)
+                signals = ["string_similarity"]
+                left_src = set(by_key[left].get("sources") or [])
+                right_src = set(by_key[right].get("sources") or [])
+                left_ch = {s.split("_chunk_")[0] for s in left_src if "_chunk_" in s}
+                right_ch = {s.split("_chunk_")[0] for s in right_src if "_chunk_" in s}
+                if left_ch & right_ch:
+                    signals.append("same_chapter")
                 uncertain.append(
                     {
                         "left": left,
                         "right": right,
                         "type": entity_type,
                         "score": round(score, 3),
+                        "signals": signals,
                         "reason": "string_similarity_bucketed",
                         "recommendation": "merge" if score >= 0.85 else "review",
                         "review_status": "pending",
@@ -111,6 +131,35 @@ def _merge_group(items: list[dict], entity_type: str) -> tuple[list[dict], list[
     return list(by_key.values()), uncertain
 
 
+def _seed_items_from_extract(
+    ex: dict,
+    *,
+    chapter_id: str = "",
+    chunk_id: str = "",
+) -> dict[str, list]:
+    source = _source_id(chapter_id, chunk_id)
+    first_appearance = chapter_id or ""
+    buckets: dict[str, list] = {
+        "characters": [],
+        "locations": [],
+        "factions": [],
+        "props": [],
+    }
+    for k in buckets:
+        for item in ex.get(k, []) or []:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            seeded = dict(item)
+            sources = list(seeded.get("sources") or [])
+            if source and source not in sources:
+                sources.append(source)
+            seeded["sources"] = sources
+            if first_appearance and not seeded.get("first_appearance"):
+                seeded["first_appearance"] = first_appearance
+            buckets[k].append(seeded)
+    return buckets
+
+
 def normalize_entities(extracts: list[dict]) -> dict:
     buckets: dict[str, list] = {
         "characters": [],
@@ -119,33 +168,48 @@ def normalize_entities(extracts: list[dict]) -> dict:
         "props": [],
     }
     for ex in extracts:
+        chapter_id = str(ex.get("_chapter_id") or "")
+        chunk_id = str(ex.get("_chunk_id") or "")
+        seeded = _seed_items_from_extract(ex, chapter_id=chapter_id, chunk_id=chunk_id)
         for k in buckets:
-            for item in ex.get(k, []) or []:
-                if isinstance(item, dict) and item.get("name"):
-                    buckets[k].append(item)
+            buckets[k].extend(seeded[k])
 
     entities: dict[str, list] = {}
     all_uncertain: list[dict] = []
     all_candidates: list[dict] = []
+    auto_merged = 0
     for k, items in buckets.items():
         merged, uncertain = _merge_group(items, k[:-1] if k.endswith("s") else k)
         entities[k] = merged
         all_uncertain.extend(uncertain)
         all_candidates.extend(uncertain)
+        auto_merged += sum(1 for e in merged if e.get("merge_history"))
 
     return {
         "entities": entities,
         "uncertain_entities": all_uncertain,
         "candidate_pairs": all_candidates,
+        "auto_merged": auto_merged,
     }
 
 
-def run_normalize(extract_dir: Path, out_json: Path) -> dict:
+def _load_extracts(extract_dir: Path, chapter_ids: set[str] | None = None) -> list[dict]:
     extracts: list[dict] = []
     for path in sorted(extract_dir.glob("*/*.json")):
         if path.name in {"extract_report.json", "errors.json", "low_quality_chunks.json"}:
             continue
-        extracts.append(json.loads(path.read_text(encoding="utf-8")))
+        if chapter_ids is not None and path.parent.name not in chapter_ids:
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data["_chapter_id"] = path.parent.name
+            data["_chunk_id"] = path.stem
+            extracts.append(data)
+    return extracts
+
+
+def run_normalize(extract_dir: Path, out_json: Path) -> dict:
+    extracts = _load_extracts(extract_dir)
     result = normalize_entities(extracts)
     entities = result["entities"]
     out_json.parent.mkdir(parents=True, exist_ok=True)
@@ -159,9 +223,15 @@ def run_normalize(extract_dir: Path, out_json: Path) -> dict:
         encoding="utf-8",
     )
     report = {
+        "characters": len(entities.get("characters") or []),
+        "locations": len(entities.get("locations") or []),
+        "props": len(entities.get("props") or []),
+        "factions": len(entities.get("factions") or []),
         "entity_counts": {k: len(v) for k, v in entities.items()},
+        "auto_merged": result.get("auto_merged", 0),
+        "uncertain": len(result["uncertain_entities"]),
         "uncertain_count": len(result["uncertain_entities"]),
-        "auto_merged": True,
+        "warnings": [],
     }
     (out_json.parent / "normalize_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -173,14 +243,7 @@ def normalize_extracts_for_chapters(
     extract_dir: Path,
     chapter_ids: set[str],
 ) -> list[dict]:
-    extracts: list[dict] = []
-    for path in sorted(extract_dir.glob("*/*.json")):
-        if path.parent.name not in chapter_ids:
-            continue
-        if path.name in {"extract_report.json", "errors.json", "low_quality_chunks.json"}:
-            continue
-        extracts.append(json.loads(path.read_text(encoding="utf-8")))
-    return extracts
+    return _load_extracts(extract_dir, chapter_ids)
 
 
 def run_normalize_volume(
@@ -195,6 +258,10 @@ def run_normalize_volume(
     out_json.write_text(json.dumps(entities, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_json.parent / "uncertain_entities.json").write_text(
         json.dumps(result["uncertain_entities"], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (out_json.parent / "candidate_pairs.json").write_text(
+        json.dumps(result["candidate_pairs"], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return entities
@@ -219,6 +286,7 @@ def merge_volume_entities(volume_entity_maps: list[dict]) -> dict:
                             "aliases": list(item.get("aliases") or []),
                             "evidence": item.get("evidence") or "",
                             "sources": list(item.get("sources") or []),
+                            "first_appearance": item.get("first_appearance") or "",
                         }
                     )
     # Re-run alias+bucket merge across volumes
@@ -255,9 +323,6 @@ def apply_entity_merge(
         )
     ]
     if not accept:
-        for u in remaining:
-            pass
-        # mark rejected by dropping from pending list
         return entities, remaining
 
     group = list(entities.get(type_key, []))
@@ -270,6 +335,11 @@ def apply_entity_merge(
     for a in [drop.get("name"), *(drop.get("aliases") or [])]:
         if a and a != keep["name"] and a not in keep.get("aliases", []):
             keep.setdefault("aliases", []).append(a)
+    for s in drop.get("sources") or []:
+        if s and s not in keep.get("sources", []):
+            keep.setdefault("sources", []).append(s)
+    if not keep.get("first_appearance") and drop.get("first_appearance"):
+        keep["first_appearance"] = drop["first_appearance"]
     keep.setdefault("merge_history", []).append(
         {"from": drop.get("name"), "reason": "manual_merge", "confidence": 1.0}
     )

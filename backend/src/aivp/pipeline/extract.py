@@ -5,6 +5,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from aivp.jobs.control import JobCancelled
 from aivp.llm.base import LlmClient
@@ -16,12 +17,17 @@ SYSTEM = (
     "你是国风长篇结构化抽取器。只输出 JSON 对象，不要 markdown。"
     "键必须齐全: summary, characters, locations, factions, props, events, "
     "foreshadowing, relationships, visual_cues, visual_candidates, voice_cues, adaptation_notes。"
-    "不得编造原文未出现的信息；缺信息用空数组或空字符串。"
+    "不得编造原文未出现的信息；不确定则填 unknown 或空字符串；缺信息用空数组或空字符串。"
+    "所有关键事实必须尽量提供 evidence 原文摘录。"
     "下方示例仅说明 JSON 字段形状，禁止照抄示例中的人名、地名与情节。"
-    "characters/locations/factions/props 为对象数组，每项含 name、aliases[]、evidence(原文摘录)。"
-    "events 为对象数组，每项至少含 summary 与 evidence，且必须来自当前正文。"
+    "characters 为对象数组，可含 name、aliases[]、identity_hint、appearance[]、personality[]、"
+    "actions[]、emotion、evidence。"
+    "locations 为对象数组，可含 name、aliases[]、description、atmosphere、evidence。"
+    "factions/props 为对象数组，每项含 name、aliases[]、evidence。"
+    "events 必须尽量包含 summary、participants、location、time_hint、cause、process、result、"
+    "importance、visual_score、evidence，且必须来自当前正文。"
     "foreshadowing 为对象数组，每项至少含 note 与 evidence。"
-    "visual_candidates 为对象数组，含 scene、evidence、visual_score。"
+    "visual_candidates 用于标记适合视频化的片段，含 scene、evidence、visual_score、reason。"
     "visual_cues/voice_cues/adaptation_notes 为 string 数组。"
 )
 
@@ -130,6 +136,8 @@ def run_extract(
     on_progress: Callable[[int, int], None] | None = None,
     workers: int = 4,
     progress_every: int = 10,
+    report_json: Path | None = None,
+    errors_json: Path | None = None,
 ) -> dict:
     chunks = [
         json.loads(line)
@@ -228,19 +236,27 @@ def run_extract(
     with lock:
         _maybe_report(force=True)
 
+    already_done = total - len(pending)
     report = {
+        "total": total,
         "chunk_count": total,
         "succeeded": succeeded,
         "failed": len(errors),
+        "skipped": already_done,
         "low_quality_count": len(low_quality),
+        "missing_evidence_chunks": low_quality,
+        "low_quality_chunks": low_quality,
+        "errors": errors,
         "skip_bad_chunks": skip_bad,
         "workers": workers,
     }
     paths.extract_dir.mkdir(parents=True, exist_ok=True)
-    paths.extract_report_json.write_text(
+    report_path = report_json or paths.extract_report_json
+    errors_path = errors_json or paths.extract_errors_json
+    report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    paths.extract_errors_json.write_text(
+    errors_path.write_text(
         json.dumps(errors, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     (paths.extract_dir / "low_quality_chunks.json").write_text(

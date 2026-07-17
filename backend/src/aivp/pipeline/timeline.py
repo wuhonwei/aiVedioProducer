@@ -54,13 +54,19 @@ def build_timeline(chunks_meta: list[dict], extracts: dict[tuple[str, str], dict
                 continue
             seen.add(norm)
             fields = _event_fields(ev if isinstance(ev, dict) else {})
+            legacy_chunk_id = c.get("id")
             events.append(
                 {
                     "id": f"event_{n:04d}",
                     "chapter_id": c["chapter_id"],
                     "chunk_id": c.get("chunk_id") or c["id"],
-                    "chunk_local_id": c["id"],
+                    "legacy_chunk_id": legacy_chunk_id,
+                    "chunk_local_id": legacy_chunk_id,
                     "narrative_order": n,
+                    "story_time_hint": fields.get("time_hint") or "",
+                    "is_flashback": bool(
+                        (ev if isinstance(ev, dict) else {}).get("is_flashback")
+                    ),
                     "summary": summary,
                     **fields,
                     "raw": ev,
@@ -158,6 +164,12 @@ def _promote_enriched(ev: dict) -> dict:
     item.update(fields)
     if not item.get("summary"):
         item["summary"] = str(ev.get("summary") or "").strip()
+    if not item.get("story_time_hint"):
+        item["story_time_hint"] = fields.get("time_hint") or ""
+    if not item.get("legacy_chunk_id"):
+        item["legacy_chunk_id"] = item.get("chunk_local_id") or ""
+    if "is_flashback" not in item:
+        item["is_flashback"] = bool(ev.get("is_flashback") or raw.get("is_flashback"))
     return item
 
 

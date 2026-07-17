@@ -12,7 +12,7 @@ class NamedEntity(BaseModel):
 class EvidenceFact(BaseModel):
     fact: str = ""
     evidence: str = ""
-    confidence: float = 0.0
+    confidence: float | None = None
 
 
 class CharacterMention(BaseModel):
@@ -26,6 +26,14 @@ class CharacterMention(BaseModel):
     evidence: str = ""
 
 
+class LocationMention(BaseModel):
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    description: str = ""
+    atmosphere: str = ""
+    evidence: str = ""
+
+
 class EventFact(BaseModel):
     summary: str
     evidence: str = ""
@@ -35,13 +43,13 @@ class EventFact(BaseModel):
     cause: str = ""
     process: str = ""
     result: str = ""
-    importance: float = 0.0
-    visual_score: float = 0.0
+    importance: float | None = None
+    visual_score: float | None = None
 
 
 class VisualCandidate(BaseModel):
     scene: str = ""
-    visual_score: float = 0.0
+    visual_score: float | None = None
     reason: str = ""
     suggested_shots: list[str] = Field(default_factory=list)
     difficulty: str = ""
@@ -57,15 +65,15 @@ class ChunkQuality(BaseModel):
 
 class ChunkExtract(BaseModel):
     summary: str = ""
-    characters: list[NamedEntity] = Field(default_factory=list)
-    locations: list[NamedEntity] = Field(default_factory=list)
+    characters: list[CharacterMention] = Field(default_factory=list)
+    locations: list[LocationMention] = Field(default_factory=list)
     factions: list[NamedEntity] = Field(default_factory=list)
     props: list[NamedEntity] = Field(default_factory=list)
-    events: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[EventFact] = Field(default_factory=list)
     foreshadowing: list[dict[str, Any]] = Field(default_factory=list)
     relationships: list[dict[str, Any]] = Field(default_factory=list)
     visual_cues: list[str] = Field(default_factory=list)
-    visual_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    visual_candidates: list[VisualCandidate] = Field(default_factory=list)
     voice_cues: list[str] = Field(default_factory=list)
     adaptation_notes: list[str] = Field(default_factory=list)
     quality: ChunkQuality = Field(default_factory=ChunkQuality)
