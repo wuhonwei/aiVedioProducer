@@ -58,6 +58,19 @@ def test_set_look_lock_and_candidates_use_ref(tmp_path: Path):
     assert payload.get("ref_image")
     assert payload.get("denoise") == 0.5
 
+    from aivp.visual.sheets import generate_character_sheets
+
+    sheets = generate_character_sheets(
+        vpaths, character, backend, slot_keys=["turnaround_front", "expr_calm"]
+    )
+    assert sheets["look_lock"] is True
+    front_meta = (
+        vpaths.sheets_dir("ent_0001") / sheets["files"][0]["file"]
+    ).with_suffix(".meta.json")
+    front_payload = __import__("json").loads(front_meta.read_text(encoding="utf-8"))
+    assert front_payload.get("look_lock") is True
+    assert front_payload.get("denoise") == 0.5
+
 
 def test_look_lock_api(tmp_path: Path):
     app = create_app(

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from aivp.visual.image_backend import ImageBackend, fresh_seed
+from aivp.visual.look_lock import resolve_look_lock
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile
 from aivp.visual.prompts import (
@@ -66,6 +67,18 @@ def _unique_sheet_name(key: str) -> str:
     return f"sheet_{key}_{stamp}.png"
 
 
+def _sheet_denoise(slot_key: str, base: float) -> float:
+    """Raise denoise for large pose/view changes while keeping identity from look-lock."""
+    key = (slot_key or "").lower()
+    if key == "turnaround_back":
+        return min(0.72, base + 0.18)
+    if key == "turnaround_side":
+        return min(0.68, base + 0.12)
+    if key.startswith("expr_"):
+        return min(0.62, base + 0.08)
+    return max(0.25, min(0.75, base))
+
+
 def generate_character_sheets(
     vpaths: VisualPaths,
     character: dict,
@@ -84,6 +97,7 @@ def generate_character_sheets(
     look = str(profile.get("prompt_zh") or profile.get("name") or "")
     lora = _lora_name(profile, vpaths, cid)
     slots = resolve_sheet_slots(group=group, slot_keys=slot_keys)
+    ref_image, base_denoise = resolve_look_lock(vpaths, cid, profile)
     created: list[dict[str, str]] = []
     total = len(slots)
     seed_base = fresh_seed()
@@ -99,7 +113,13 @@ def generate_character_sheets(
             gender_presentation=str(profile.get("gender_presentation") or ""),
             profile=profile,
         )
+        if ref_image:
+            prompt = (
+                f"{prompt}, keep same character identity and outfit as reference, "
+                "consistent face hair and wardrobe"
+            )
         dest = out_dir / _unique_sheet_name(key)
+        denoise = _sheet_denoise(key, base_denoise) if ref_image else 1.0
         backend.generate(
             prompt=prompt,
             negative=sheet_negative_for(
@@ -113,6 +133,8 @@ def generate_character_sheets(
             height=1024,
             lora_name=lora,
             lora_strength=0.75,
+            ref_image=ref_image,
+            denoise=denoise,
         )
         meta = {
             "key": key,
@@ -120,6 +142,8 @@ def generate_character_sheets(
             "file": dest.name,
             "prompt": prompt,
             "for_lora": True,
+            "look_lock": bool(ref_image),
+            "denoise": denoise,
         }
         dest.with_suffix(".meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -144,6 +168,8 @@ def generate_character_sheets(
             on_progress(len(created), total)
     profile["status"] = "sheets_ready"
     profile["sheets_generated_at"] = datetime.now(timezone.utc).isoformat()
+    if ref_image:
+        profile["sheets_used_look_lock"] = True
     vpaths.profile_json(cid).write_text(
         json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -153,4 +179,6 @@ def generate_character_sheets(
         "trigger": trigger,
         "group": group,
         "slot_keys": [s[0] for s in slots],
+        "look_lock": bool(ref_image),
+        "denoise": base_denoise if ref_image else 1.0,
     }

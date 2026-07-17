@@ -592,8 +592,9 @@ export function VisualPage({ projectId }: Props) {
               {active.look_lock_ready && (
                 <div className="bible-card" aria-label="look-lock-panel">
                   <p className="note" style={{ marginBottom: 8 }}>
-                    定妆已锁定：后续候选将用 img2img 参考此图（denoise{" "}
-                    {Number(active.look_lock?.denoise ?? 0.48).toFixed(2)}）
+                    定妆已锁定：后续<strong>候选 / 三视图 / 表情</strong>都会用 img2img
+                    参考此图（基础 denoise{" "}
+                    {Number(active.look_lock?.denoise ?? 0.48).toFixed(2)}；侧面/背面会略提高）
                   </p>
                   <div className="row" style={{ alignItems: "center", gap: 12 }}>
                     <img
@@ -620,7 +621,8 @@ export function VisualPage({ projectId }: Props) {
               )}
               {!active.look_lock_ready && (
                 <p className="note">
-                  提示：先生成并挑选一张满意图，点「设为定妆」，再批量生成候选，性别/着装会稳定很多。
+                  提示：先生成并挑选一张满意图，点「设为定妆」，再批量生成候选 / 三视图 /
+                  表情，性别与着装会稳定很多。
                 </p>
               )}
               <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
