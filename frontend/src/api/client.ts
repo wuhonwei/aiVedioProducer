@@ -308,6 +308,7 @@ export type VisualCharacter = {
     file?: string;
     ref_file?: string;
     denoise?: number;
+    set_at?: string;
   } | null;
   look_lock_ready?: boolean;
   candidates: string[];

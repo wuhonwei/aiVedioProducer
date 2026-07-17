@@ -587,7 +587,11 @@ def get_visual_file(
     path = vpaths.character_dir(character_id) / folder / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="file not found")
-    return FileResponse(path)
+    headers = None
+    if folder == "look_lock":
+        # ref.png is overwritten in place; prevent browsers from keeping the old preview.
+        headers = {"Cache-Control": "no-store, max-age=0"}
+    return FileResponse(path, headers=headers)
 
 
 @router.delete("/projects/{project_id}/visual/characters/{character_id}/files/{folder}/{filename}")

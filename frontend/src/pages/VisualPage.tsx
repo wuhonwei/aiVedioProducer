@@ -604,12 +604,15 @@ export function VisualPage({ projectId }: Props) {
                   </p>
                   <div className="row" style={{ alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     <img
-                      src={visualFileUrl(
+                      key={`look-lock-${active.look_lock?.file || ""}-${active.look_lock?.set_at || ""}`}
+                      src={`${visualFileUrl(
                         projectId,
                         active.character_id,
                         "look_lock",
                         active.look_lock?.ref_file || "ref.png",
-                      )}
+                      )}?v=${encodeURIComponent(
+                        active.look_lock?.set_at || active.look_lock?.file || String(Date.now()),
+                      )}`}
                       alt="look-lock"
                       className="visual-thumb-img"
                       style={{ width: 96, height: 128 }}
