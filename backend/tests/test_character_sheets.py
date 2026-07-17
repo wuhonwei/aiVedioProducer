@@ -145,3 +145,22 @@ def test_visual_sheets_and_delete_api(tmp_path: Path):
 def test_probe_framing_mentions_person():
     assert "1person" in PROBE_FRAMING
     assert "人物半身特写" in PROBE_FRAMING
+
+
+def test_turnaround_prompts_force_solo_not_sheet_plate():
+    from aivp.visual.prompts import build_character_prompt, sheet_negative_for
+
+    for key, _label, framing in TURNAROUND_SLOTS:
+        assert "solo" in framing
+        assert "1person" in framing
+        assert "turnaround sheet" not in framing.lower()
+        assert "character sheet" not in framing.lower()
+        prompt = build_character_prompt("lin_aivp", "青灰长衫", framing)
+        assert prompt.startswith("solo") or "solo" in prompt.split(",")[0]
+        neg = sheet_negative_for("male", slot_key=key)
+        assert "multiple people" in neg or "2people" in neg
+        assert "character sheet" in neg
+        if key == "turnaround_back":
+            assert "looking at viewer" in neg or "face" in neg
+        if key == "turnaround_front":
+            assert "back view" in neg

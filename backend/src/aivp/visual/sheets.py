@@ -96,7 +96,10 @@ def generate_character_sheets(
         dest = out_dir / _unique_sheet_name(key)
         backend.generate(
             prompt=prompt,
-            negative=sheet_negative_for(str(profile.get("gender_presentation") or "")),
+            negative=sheet_negative_for(
+                str(profile.get("gender_presentation") or ""),
+                slot_key=key,
+            ),
             dest=dest,
             seed=(seed_base + i) % (2_147_483_647 + 1),
             width=768,
@@ -115,9 +118,18 @@ def generate_character_sheets(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         kind = "turnaround" if key.startswith("turnaround_") else "expression"
+        if key == "turnaround_front":
+            view_tag = "front view, facing viewer"
+        elif key == "turnaround_side":
+            view_tag = "side profile view"
+        elif key == "turnaround_back":
+            view_tag = "back view, from behind"
+        else:
+            view_tag = label
         caption = (
-            f"{trigger}, {look}, {label}, {framing}, "
-            f"guofeng anime character {kind} sheet, consistent character design"
+            f"{trigger}, {look}, {view_tag}, {framing}, "
+            f"guofeng anime character {kind} reference, solo, 1person, "
+            "consistent character design"
         )
         dest.with_suffix(".txt").write_text(caption.strip(), encoding="utf-8")
         created.append({"key": key, "label": label, "file": dest.name, "kind": kind})
