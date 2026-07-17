@@ -673,7 +673,11 @@ def start_visual_self_check(
         _write_job(path, data)
         try:
             from aivp.llm.ollama_vision_client import OllamaVisionClient
-            from aivp.visual.self_check import evaluate_character_images, run_self_check_loop
+            from aivp.visual.self_check import (
+                evaluate_character_images,
+                resolve_major_characters,
+                run_self_check_loop,
+            )
 
             vision = OllamaVisionClient(settings.ollama_base_url, settings.ollama_vision_model)
             if not vision.model_available():
@@ -687,10 +691,10 @@ def start_visual_self_check(
                 else float(settings.visual_qa_pass_rate)
             )
             if body.judge_only:
-                bible_chars = load_major_characters(vpaths)
-                if body.character_ids:
-                    wanted = set(body.character_ids)
-                    bible_chars = [c for c in bible_chars if str(c.get("id") or "") in wanted]
+                bible = _load_bible(settings, project_id)
+                bible_chars = resolve_major_characters(
+                    vpaths, bible=bible, character_ids=body.character_ids
+                )
                 reports = [
                     evaluate_character_images(vpaths, ch, vision) for ch in bible_chars
                 ]
@@ -701,10 +705,12 @@ def start_visual_self_check(
                 }
             else:
                 backend = get_image_backend(settings)
+                bible = _load_bible(settings, project_id)
                 result = run_self_check_loop(
                     vpaths,
                     backend,
                     vision,
+                    bible=bible,
                     character_ids=body.character_ids,
                     pass_rate_threshold=threshold,
                     max_rounds=int(body.max_rounds or settings.visual_qa_max_rounds),

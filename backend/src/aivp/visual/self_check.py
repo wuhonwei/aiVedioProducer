@@ -19,6 +19,34 @@ DEFAULT_PASS_RATE = 0.60
 DEFAULT_MAX_ROUNDS = 3
 
 
+def load_project_bible(data_root, project_id: str) -> dict:
+    from aivp.bible.overlay import merge_bible
+    from aivp.paths import ProjectPaths
+
+    paths = ProjectPaths(data_root, project_id)
+    auto: dict = {}
+    overlay: dict = {}
+    if paths.auto_bible_json.exists():
+        auto = json.loads(paths.auto_bible_json.read_text(encoding="utf-8"))
+    if paths.overlay_json.exists():
+        overlay = json.loads(paths.overlay_json.read_text(encoding="utf-8"))
+    return merge_bible(auto, overlay)
+
+
+def resolve_major_characters(
+    vpaths: VisualPaths,
+    *,
+    bible: dict | None = None,
+    character_ids: list[str] | None = None,
+) -> list[dict]:
+    doc = bible if isinstance(bible, dict) else load_project_bible(vpaths.data_root, vpaths.project_id)
+    majors = load_major_characters(doc)
+    if character_ids:
+        wanted = set(character_ids)
+        majors = [c for c in majors if str(c.get("id") or "") in wanted]
+    return majors
+
+
 def suggest_patches(failure_tags: Counter[str], *, pass_rate: float) -> dict[str, Any]:
     """Map frequent judge failures to generation tuning knobs."""
     patches: dict[str, Any] = {
@@ -233,6 +261,7 @@ def run_self_check_loop(
     backend: ImageBackend,
     vision: VisionJudge,
     *,
+    bible: dict | None = None,
     character_ids: list[str] | None = None,
     pass_rate_threshold: float = DEFAULT_PASS_RATE,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
@@ -240,10 +269,9 @@ def run_self_check_loop(
     apply_patches: bool = True,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    majors = load_major_characters(vpaths)
-    if character_ids:
-        wanted = set(character_ids)
-        majors = [c for c in majors if str(c.get("id") or "") in wanted]
+    majors = resolve_major_characters(
+        vpaths, bible=bible, character_ids=character_ids
+    )
     if not majors:
         raise ValueError("no_major_characters_for_self_check")
 

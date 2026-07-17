@@ -23,9 +23,10 @@ from aivp.visual.image_backend import get_image_backend  # noqa: E402
 from aivp.visual.paths import VisualPaths  # noqa: E402
 from aivp.visual.self_check import (  # noqa: E402
     evaluate_character_images,
+    load_project_bible,
+    resolve_major_characters,
     run_self_check_loop,
 )
-from aivp.visual.profiles import load_major_characters  # noqa: E402
 
 
 def main() -> int:
@@ -62,12 +63,10 @@ def main() -> int:
         else float(settings.visual_qa_pass_rate)
     )
     rounds = int(args.rounds) if args.rounds is not None else int(settings.visual_qa_max_rounds)
+    bible = load_project_bible(settings.data_root, args.project)
 
     if args.judge_only:
-        majors = load_major_characters(vpaths)
-        if ids:
-            wanted = set(ids)
-            majors = [c for c in majors if str(c.get("id") or "") in wanted]
+        majors = resolve_major_characters(vpaths, bible=bible, character_ids=ids)
         reports = []
         for ch in majors:
             reports.append(
@@ -103,6 +102,7 @@ def main() -> int:
         vpaths,
         backend,
         vision,
+        bible=bible,
         character_ids=ids,
         pass_rate_threshold=threshold,
         max_rounds=rounds,

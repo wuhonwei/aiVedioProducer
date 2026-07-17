@@ -5,7 +5,9 @@ from pathlib import Path
 
 class VisualPaths:
     def __init__(self, data_root: Path, project_id: str):
-        self.root = data_root / "projects" / project_id / "visual"
+        self.data_root = Path(data_root)
+        self.project_id = project_id
+        self.root = self.data_root / "projects" / project_id / "visual"
         self.characters_dir = self.root / "characters"
         self.comfy_dir = self.root / "comfy"
         self.jobs_dir = self.root / "jobs"
