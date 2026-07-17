@@ -92,13 +92,20 @@ def generate_character_sheets(
     for i, (key, label, framing) in enumerate(slots):
         if should_cancel and should_cancel():
             break
-        prompt = build_character_prompt(trigger, look, framing)
+        prompt = build_character_prompt(
+            trigger,
+            look,
+            framing,
+            gender_presentation=str(profile.get("gender_presentation") or ""),
+            profile=profile,
+        )
         dest = out_dir / _unique_sheet_name(key)
         backend.generate(
             prompt=prompt,
             negative=sheet_negative_for(
                 str(profile.get("gender_presentation") or ""),
                 slot_key=key,
+                text_hints=f"{look} {profile.get('name') or ''}",
             ),
             dest=dest,
             seed=(seed_base + i) % (2_147_483_647 + 1),

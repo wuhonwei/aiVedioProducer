@@ -8,7 +8,7 @@ from typing import Any
 from aivp.visual.image_backend import ImageBackend, fresh_seed
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters
-from aivp.visual.prompts import character_negative_for
+from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
 
 
 VIEW_PROMPTS = [
@@ -21,25 +21,6 @@ VIEW_PROMPTS = [
     "solo, 1person, walking pose, full body, simple background",
     "solo, 1person, sitting pose, medium shot, simple background",
 ]
-
-
-def build_candidate_prompt(profile: dict, view: str) -> str:
-    trigger = profile.get("trigger") or "character_aivp"
-    base = profile.get("prompt_zh") or profile.get("name") or trigger
-    anchors = "，".join(profile.get("consistency_anchors") or [])
-    wardrobe = ""
-    w = profile.get("wardrobe") or {}
-    if isinstance(w, dict):
-        wardrobe = str(w.get("default") or "")
-    parts = [
-        trigger,
-        str(base),
-        wardrobe,
-        anchors,
-        view,
-        "guofeng anime style, consistent character design, masterpiece",
-    ]
-    return "，".join([p for p in parts if p])
 
 
 def _unique_stem(prefix: str) -> str:
@@ -64,7 +45,7 @@ def generate_candidates_for_character(
     created: list[str] = []
     # No hard cap on how many times the user may generate; soft ceiling avoids runaway jobs.
     n = max(1, min(int(count), 100))
-    neg = negative or character_negative_for(str(profile.get("gender_presentation") or ""))
+    neg = negative or candidate_negative_for(profile)
     batch = _unique_stem("cand")
     # New base each batch so Comfy does not replay the same 8 seeds forever.
     seed_base = fresh_seed()
@@ -85,10 +66,7 @@ def generate_candidates_for_character(
             width=768,
             height=1024,
         )
-        dest.with_suffix(".txt").write_text(
-            f"{profile['trigger']}, {view}, {profile.get('prompt_zh') or ''}".strip(),
-            encoding="utf-8",
-        )
+        dest.with_suffix(".txt").write_text(prompt, encoding="utf-8")
         created.append(dest.name)
         if on_progress:
             on_progress(len(created), n)

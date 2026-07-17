@@ -155,8 +155,9 @@ def test_turnaround_prompts_force_solo_not_sheet_plate():
         assert "1person" in framing
         assert "turnaround sheet" not in framing.lower()
         assert "character sheet" not in framing.lower()
-        prompt = build_character_prompt("lin_aivp", "青灰长衫", framing)
-        assert prompt.startswith("solo") or "solo" in prompt.split(",")[0]
+        prompt = build_character_prompt("lin_aivp", "青灰长衫少年", framing, gender_presentation="male")
+        assert "1boy" in prompt or "male" in prompt
+        assert "solo" in prompt
         neg = sheet_negative_for("male", slot_key=key)
         assert "multiple people" in neg or "2people" in neg
         assert "character sheet" in neg
@@ -164,3 +165,27 @@ def test_turnaround_prompts_force_solo_not_sheet_plate():
             assert "looking at viewer" in neg or "face" in neg
         if key == "turnaround_front":
             assert "back view" in neg
+
+
+def test_candidate_prompt_locks_gender_and_wardrobe():
+    from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for, normalize_gender
+
+    assert normalize_gender("unspecified", text_hints="青灰长衫少年") == "male"
+    assert normalize_gender("unspecified", text_hints="绣裙少女") == "female"
+
+    profile = {
+        "trigger": "lin_aivp",
+        "name": "林启之",
+        "prompt_zh": "青灰长衫少年，黑发束冠",
+        "gender_presentation": "masculine",
+        "appearance": {"hair": "黑发束冠", "eyes": "深目"},
+        "wardrobe": {"default": "青灰长衫"},
+        "consistency_anchors": ["青灰长衫"],
+    }
+    prompt = build_candidate_prompt(profile, "solo, 1person, portrait")
+    assert "1boy" in prompt
+    assert "青灰长衫" in prompt
+    assert "黑发束冠" in prompt
+    neg = candidate_negative_for(profile)
+    assert "1girl" in neg
+    assert "different outfit" in neg or "costume change" in neg
