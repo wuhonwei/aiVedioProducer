@@ -14,6 +14,7 @@ router = APIRouter(tags=["reports"])
 REPORT_MAP = {
     "clean": lambda p: p.clean_report_json,
     "clean_metadata": lambda p: p.clean_metadata_json,
+    "metadata": lambda p: p.metadata_json,
     "chapters": lambda p: p.chapter_report_json,
     "chunks": lambda p: p.chunk_report_json,
     "extract": lambda p: p.extract_report_json,

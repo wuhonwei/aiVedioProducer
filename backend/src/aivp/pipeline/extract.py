@@ -200,8 +200,11 @@ def run_extract(
         except Exception as e:  # noqa: BLE001
             err = {
                 "chunk_id": chunk.get("chunk_id") or chunk["id"],
+                "legacy_chunk_id": chunk.get("id"),
                 "chapter_id": chunk["chapter_id"],
+                "error_type": "schema_validation_error",
                 "error": "json_schema_validation_failed",
+                "message": str(e),
                 "detail": str(e),
                 "retry_count": max_retries + 1,
                 "skipped": bool(skip_bad),
@@ -237,12 +240,14 @@ def run_extract(
         _maybe_report(force=True)
 
     already_done = total - len(pending)
+    retry_count_total = sum(int(e.get("retry_count") or 0) for e in errors)
     report = {
         "total": total,
         "chunk_count": total,
         "succeeded": succeeded,
         "failed": len(errors),
         "skipped": already_done,
+        "retry_count_total": retry_count_total,
         "low_quality_count": len(low_quality),
         "missing_evidence_chunks": low_quality,
         "low_quality_chunks": low_quality,

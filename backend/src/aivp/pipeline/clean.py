@@ -18,11 +18,20 @@ def clean_text(text: str) -> tuple[str, dict]:
     removed_url_lines = 0
     bom_removed = text.startswith("\ufeff")
     removed_samples: list[str] = []
+    suspicious_lines: list[dict] = []
     if bom_removed:
         text = text.lstrip("\ufeff")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = "".join(ch for ch in text if ch == "\n" or ch == "\t" or ord(ch) >= 32)
     kept: list[str] = []
+
+    def _note_removed(line: str, reason: str) -> None:
+        sample = line[:120]
+        if len(removed_samples) < 20:
+            removed_samples.append(sample)
+        if len(suspicious_lines) < 40:
+            suspicious_lines.append({"line": sample, "reason": reason, "action": "removed"})
+
     for line in text.split("\n"):
         stripped = line.strip()
         if not stripped:
@@ -36,15 +45,22 @@ def clean_text(text: str) -> tuple[str, dict]:
         if is_url:
             removed_lines += 1
             removed_url_lines += 1
-            if len(removed_samples) < 20:
-                removed_samples.append(stripped[:120])
+            _note_removed(stripped, "url")
             continue
         if is_ad and len(stripped) < 120:
             removed_lines += 1
             removed_ad_lines += 1
-            if len(removed_samples) < 20:
-                removed_samples.append(stripped[:120])
+            _note_removed(stripped, "ad")
             continue
+        # Long ad-like lines are kept (conservative), but flagged for review.
+        if is_ad and len(stripped) >= 120 and len(suspicious_lines) < 40:
+            suspicious_lines.append(
+                {
+                    "line": stripped[:120],
+                    "reason": "ad_like_kept",
+                    "action": "kept",
+                }
+            )
         kept.append(line)
     text = "\n".join(kept)
     while "\n\n\n" in text:
@@ -58,7 +74,7 @@ def clean_text(text: str) -> tuple[str, dict]:
         "removed_ad_lines": removed_ad_lines,
         "removed_url_lines": removed_url_lines,
         "removed_samples": removed_samples,
-        "suspicious_lines": [],
+        "suspicious_lines": suspicious_lines,
         "warnings": [],
     }
     return text, report
@@ -84,6 +100,9 @@ def run_clean(
     if text is None or detected is None:
         raise ValueError("unable_to_decode_source")
     cleaned, report = clean_text(text)
+    # utf-8-sig decode already strips BOM before clean_text sees the string.
+    if detected == "utf-8-sig":
+        report["bom_removed"] = True
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(cleaned, encoding="utf-8")
     meta = {

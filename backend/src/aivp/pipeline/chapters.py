@@ -3,17 +3,18 @@ import re
 from pathlib import Path
 
 # Common Chinese web-novel / book headings.
+# Title suffix stays on the same line only (\s would eat the next body line).
 HEADING_RE = re.compile(
     r"^(?:"
-    r"第[零一二三四五六七八九十百千两0-9]+[章节回卷](?:\s+.*)?$"
-    r"|Chapter\s+\d+(?:\s+.*)?$"
-    r"|卷[零一二三四五六七八九十百千0-9]+(?:\s+.*)?$"
-    r"|序章(?:\s+.*)?$"
-    r"|楔子(?:\s+.*)?$"
-    r"|尾声(?:\s+.*)?$"
-    r"|后记(?:\s+.*)?$"
+    r"第[零一二三四五六七八九十百千两0-9]+[章节回卷](?:[ \t]+[^\n]*)?$"
+    r"|Chapter\s+\d+(?:[ \t]+[^\n]*)?$"
+    r"|卷[零一二三四五六七八九十百千0-9]+(?:[ \t]+[^\n]*)?$"
+    r"|序章(?:[ \t]+[^\n]*)?$"
+    r"|楔子(?:[ \t]+[^\n]*)?$"
+    r"|尾声(?:[ \t]+[^\n]*)?$"
+    r"|后记(?:[ \t]+[^\n]*)?$"
     r"|正文$"
-    r"|番外[零一二三四五六七八九十百千0-9]*?(?:\s+.*)?$"
+    r"|番外[零一二三四五六七八九十百千0-9]*?(?:[ \t]+[^\n]*)?$"
     r")",
     re.MULTILINE | re.IGNORECASE,
 )

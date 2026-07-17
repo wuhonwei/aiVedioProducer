@@ -19,6 +19,7 @@ const TERMINAL = new Set(["succeeded", "failed", "step_failed", "cancelled"]);
 const REPORT_LABELS: Record<string, string> = {
   clean: "清洗",
   clean_metadata: "清洗元数据",
+  metadata: "清洗元数据",
   chapters: "章节",
   chunks: "Chunk",
   extract: "抽取",

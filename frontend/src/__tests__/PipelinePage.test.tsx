@@ -10,6 +10,8 @@ describe("PipelinePage", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     localStorage.clear();
     vi.mocked(api.getLatestJob).mockRejectedValue(new Error("no jobs"));
+    vi.mocked(api.listPipelineReports).mockResolvedValue({ reports: [] });
+    vi.mocked(api.getPipelineReport).mockResolvedValue({ chapter_count: 2 });
     vi.mocked(api.startJob).mockResolvedValue({
       id: "j1",
       project_id: "p1",
@@ -116,5 +118,37 @@ describe("PipelinePage", () => {
     await waitFor(() => {
       expect(api.cancelJob).toHaveBeenCalledWith("p1", "j1");
     });
+  });
+
+  it("shows text quality reports and opens preview", async () => {
+    vi.mocked(api.listPipelineReports).mockResolvedValue({
+      reports: [
+        { name: "chapters", available: true, path: "stages/02_chapters/chapter_report.json" },
+        { name: "extract", available: false, path: "stages/04_extract/extract_report.json" },
+      ],
+    });
+    vi.mocked(api.getPipelineReport).mockResolvedValue({
+      chapter_count: 3,
+      maybe_unsplit: false,
+    });
+
+    render(<PipelinePage projectId="p1" />);
+
+    expect(await screen.findByText("文本质量报告")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "刷新报告" }));
+
+    await waitFor(() => {
+      expect(api.listPipelineReports).toHaveBeenCalledWith("p1");
+    });
+
+    const chapterBtn = await screen.findByRole("button", { name: "章节" });
+    expect(chapterBtn).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "抽取（无）" })).toBeDisabled();
+
+    fireEvent.click(chapterBtn);
+    await waitFor(() => {
+      expect(api.getPipelineReport).toHaveBeenCalledWith("p1", "chapters");
+    });
+    expect(await screen.findByText(/"chapter_count": 3/)).toBeInTheDocument();
   });
 });

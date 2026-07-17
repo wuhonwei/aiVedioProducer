@@ -13,11 +13,13 @@ def test_timeline_orders_by_chapter_then_index():
                     "summary": "相遇",
                     "participants": ["甲"],
                     "location": "渡口",
+                    "time_hint": "雨夜",
                     "cause": "赶路",
                     "result": "见面",
                     "importance": 0.8,
                     "visual_score": 0.9,
                     "evidence": "甲在渡口遇见乙。",
+                    "is_flashback": True,
                 }
             ]
         },
@@ -34,8 +36,28 @@ def test_timeline_orders_by_chapter_then_index():
     assert events[0]["visual_score"] == 0.9
     assert events[0]["legacy_chunk_id"] == "0001"
     assert events[0]["chunk_local_id"] == "0001"
-    assert "story_time_hint" in events[0]
-    assert events[0]["is_flashback"] is False
+    assert events[0]["story_time_hint"] == "雨夜"
+    assert events[0]["time_hint"] == "雨夜"
+    assert events[0]["is_flashback"] is True
+    assert isinstance(events[0]["raw"], dict)
+    assert events[0]["raw"]["summary"] == "相遇"
+
+
+def test_timeline_legacy_event_summary_only():
+    chunks_meta = [
+        {"id": "0001", "chunk_id": "chapter_0001_chunk_0001", "chapter_id": "chapter_0001", "index": 1},
+    ]
+    extracts = {
+        ("chapter_0001", "0001"): {"events": [{"summary": "只有摘要"}]},
+    }
+    events = build_timeline(chunks_meta, extracts)
+    assert len(events) == 1
+    assert events[0]["summary"] == "只有摘要"
+    assert events[0]["participants"] == []
+    assert events[0]["location"] == ""
+    assert events[0]["evidence"] == ""
+    assert events[0]["visual_score"] == 0.0
+    assert events[0]["raw"]["summary"] == "只有摘要"
 
 
 def test_timeline_dedupes_exact_and_whitespace_duplicates():

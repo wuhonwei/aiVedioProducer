@@ -38,8 +38,46 @@ def test_run_extract_writes_files_and_report(tmp_path: Path):
         "visual_cues": [], "visual_candidates": [], "voice_cues": [],
         "adaptation_notes": [],
     })
-    run_extract(paths, llm, max_retries=1, skip_bad=True)
+    result = run_extract(paths, llm, max_retries=1, skip_bad=True)
     out = paths.extract_chunk_json("ch001", "0001")
     assert out.exists()
     assert paths.extract_report_json.exists()
     assert paths.extract_errors_json.exists()
+    report = json.loads(paths.extract_report_json.read_text(encoding="utf-8"))
+    assert report["total"] == 1
+    assert report["succeeded"] == 1
+    assert report["failed"] == 0
+    assert "retry_count_total" in report
+    assert result["report"]["succeeded"] == 1
+
+
+class _BoomLlm(FakeLlm):
+    def complete_json(self, system, user, *, should_cancel=None):  # noqa: ANN001
+        raise RuntimeError("boom")
+
+
+def test_run_extract_writes_structured_errors(tmp_path: Path):
+    paths = ProjectPaths(tmp_path, "p2")
+    paths.ensure()
+    chunk = {
+        "id": "0002",
+        "chapter_id": "chapter_0003",
+        "chapter_title": "T",
+        "text": "乙",
+        "chunk_id": "chapter_0003_chunk_0002",
+    }
+    paths.chunks_jsonl.write_text(json.dumps(chunk, ensure_ascii=False) + "\n", encoding="utf-8")
+    run_extract(paths, _BoomLlm(), max_retries=1, skip_bad=True)
+    errors = json.loads(paths.extract_errors_json.read_text(encoding="utf-8"))
+    assert len(errors) == 1
+    err = errors[0]
+    assert err["chunk_id"] == "chapter_0003_chunk_0002"
+    assert err["legacy_chunk_id"] == "0002"
+    assert err["chapter_id"] == "chapter_0003"
+    assert err["error_type"] == "schema_validation_error"
+    assert err["skipped"] is True
+    assert err["retry_count"] >= 1
+    report = json.loads(paths.extract_report_json.read_text(encoding="utf-8"))
+    assert report["failed"] == 1
+    assert report["retry_count_total"] >= 1
+    assert report["errors"]

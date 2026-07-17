@@ -242,11 +242,18 @@ def run_job(
                         ),
                         encoding="utf-8",
                     )
+                    uncertain_n = len(merged.get("uncertain_entities") or [])
                     report = {
+                        "characters": len(entities.get("characters") or []),
+                        "locations": len(entities.get("locations") or []),
+                        "props": len(entities.get("props") or []),
+                        "factions": len(entities.get("factions") or []),
                         "entity_counts": {k: len(v) for k, v in entities.items()},
-                        "uncertain_count": len(merged.get("uncertain_entities") or []),
+                        "auto_merged": int(merged.get("auto_merged") or 0),
+                        "uncertain": uncertain_n,
+                        "uncertain_count": uncertain_n,
                         "volume_count": len(volumes),
-                        "auto_merged": True,
+                        "warnings": [],
                     }
                     paths.normalize_report_json.write_text(
                         json.dumps(report, ensure_ascii=False, indent=2),
