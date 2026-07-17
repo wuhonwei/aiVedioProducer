@@ -201,6 +201,17 @@ def test_candidate_prompt_locks_gender_and_wardrobe():
     assert "1boy" in prompt
     assert "青灰长衫" in prompt
     assert "黑发束冠" in prompt
+    assert "full body" in prompt
+    assert "feet visible" in prompt
     neg = candidate_negative_for(profile)
     assert "1girl" in neg
     assert "different outfit" in neg or "costume change" in neg
+    assert "upper body only" in neg or "cropped feet" in neg
+
+
+def test_turnaround_front_requires_full_body():
+    front = next(s for s in TURNAROUND_SLOTS if s[0] == "turnaround_front")
+    framing = front[2].lower()
+    assert "full body" in framing
+    assert "feet visible" in framing
+    assert "head to toe" in framing

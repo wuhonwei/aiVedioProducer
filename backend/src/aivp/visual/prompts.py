@@ -10,7 +10,9 @@ PROBE_FRAMING = (
 CHARACTER_NEGATIVE = (
     "lowres, blurry, inconsistent face, bad anatomy, watermark, "
     "scenery, landscape, palace, architecture, empty, no humans, "
-    "out of frame, cropped head, modern clothes, western clothes, "
+    "out of frame, cropped head, cropped feet, cropped legs, "
+    "upper body only, portrait crop, close-up, bust shot, "
+    "modern clothes, western clothes, "
     "school uniform, armor, wedding dress, costume change, different outfit, "
     "multiple people, 2people, 2girls, 2boys, crowd"
 )
@@ -143,6 +145,7 @@ def build_candidate_prompt(profile: dict, view: str) -> str:
     )
     parts = [
         gender_lock_positive(gender),
+        "full body, head to toe, feet visible, entire figure in frame",
         trigger,
         look,
         *appearance_lock_tokens(profile),
@@ -165,18 +168,21 @@ def _view_lock_negative(slot_key: str | None) -> str:
     if key == "turnaround_front":
         return (
             "back view, from behind, rear view, facing away, "
-            "side profile, profile view, looking away"
+            "side profile, profile view, looking away, "
+            "upper body only, portrait, close-up, cropped feet, cropped legs, bust shot"
         )
     if key == "turnaround_side":
         return (
             "front view, facing viewer, looking at viewer, face to camera, "
             "chest toward camera, three-quarter view, back view, from behind, "
-            "rear view, symmetrical front portrait"
+            "rear view, symmetrical front portrait, "
+            "upper body only, portrait, close-up, cropped feet, cropped legs"
         )
     if key == "turnaround_back":
         return (
             "face, facial features, eyes, nose, mouth, looking at viewer, "
-            "front view, facing camera, portrait, side profile, three-quarter view"
+            "front view, facing camera, portrait, side profile, three-quarter view, "
+            "upper body only, close-up, cropped feet, cropped legs"
         )
     return ""
 
@@ -201,23 +207,28 @@ def sheet_negative_for(
 # Avoid the phrase "turnaround sheet" — it pulls multi-figure reference plates.
 _TURNAROUND_BASE = (
     "solo, 1person, only one character, single figure, "
-    "full body visible head to toe, standing upright, arms relaxed at sides, "
+    "FULL BODY visible head to toe, feet visible on ground, entire figure in frame, "
+    "standing upright, arms relaxed at sides, "
     "centered composition, plain seamless white background, studio lighting, "
     "guofeng anime style, consistent character design, "
-    "single camera angle, orthographic character reference photo"
+    "single camera angle, orthographic character reference photo, "
+    "no crop, no close-up, no upper body only"
 )
 
 TURNAROUND_SLOTS: list[tuple[str, str, str]] = [
     (
         "turnaround_front",
         "三视图正面",
-        "front view, facing viewer, looking at viewer, face fully visible, "
-        f"chest toward camera, {_TURNAROUND_BASE}",
+        "FULL BODY front view, head to toe, feet visible, entire character in frame, "
+        "facing viewer, looking at viewer, face fully visible, chest toward camera, "
+        "standing A-pose or neutral, "
+        f"{_TURNAROUND_BASE}",
     ),
     (
         "turnaround_side",
         "三视图侧面",
-        "STRICT side view only, 90-degree side profile, from the side, "
+        "STRICT side view only, FULL BODY head to toe, feet visible, "
+        "90-degree side profile, from the side, "
         "head in profile, one ear visible, nose pointing left or right, "
         "body parallel to camera, no front face, "
         f"{_TURNAROUND_BASE}",
@@ -225,7 +236,8 @@ TURNAROUND_SLOTS: list[tuple[str, str, str]] = [
     (
         "turnaround_back",
         "三视图背面",
-        "STRICT rear view only, from behind, back of head, facing away, "
+        "STRICT rear view only, FULL BODY head to toe, feet visible, "
+        "from behind, back of head, facing away, "
         "no face visible, no eyes, back of outfit visible, "
         f"{_TURNAROUND_BASE}",
     ),

@@ -13,14 +13,14 @@ from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
 
 
 VIEW_PROMPTS = [
-    "solo, 1person, facing camera, portrait, upper body, simple background",
-    "solo, 1person, three quarter view, standing, full body, simple background",
-    "solo, 1person, side profile, upper body, simple background",
-    "solo, 1person, looking away, soft light, upper body, simple background",
-    "solo, 1person, over the shoulder, dramatic light, simple background",
-    "solo, 1person, close-up face, detailed eyes, simple background",
-    "solo, 1person, walking pose, full body, simple background",
-    "solo, 1person, sitting pose, medium shot, simple background",
+    "solo, 1person, full body, head to toe, feet visible, facing camera, standing, plain background",
+    "solo, 1person, full body, head to toe, feet visible, three quarter view, standing, plain background",
+    "solo, 1person, full body, head to toe, feet visible, side profile standing, plain background",
+    "solo, 1person, full body, head to toe, feet visible, looking away, standing, soft light, plain background",
+    "solo, 1person, full body, head to toe, feet visible, slight contrapposto standing pose, plain background",
+    "solo, 1person, full body, head to toe, feet visible, walking pose, plain background",
+    "solo, 1person, full body, head to toe, feet visible, standing hands at sides, plain background",
+    "solo, 1person, full body, head to toe, feet visible, standing relaxed pose, plain background",
 ]
 
 
