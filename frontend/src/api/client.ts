@@ -398,6 +398,96 @@ export const swapVisualBootstrapLookLock = (
     },
   );
 
+export type VisualLocation = {
+  location_id: string;
+  name: string;
+  trigger: string;
+  candidate_count: number;
+  curated_count: number;
+  sheet_count?: number;
+  lora_ready: boolean;
+  train_status?: string;
+  bootstrap_status?: string;
+  bootstrap_warnings?: string[];
+  look_lock?: {
+    folder?: string;
+    file?: string;
+    ref_file?: string;
+    denoise?: number;
+  } | null;
+  look_lock_ready?: boolean;
+  look_lock_archive?: string[];
+  candidates: string[];
+  curated: string[];
+  sheets?: string[];
+  prompt_zh?: string;
+  status?: string;
+};
+
+export const listVisualLocations = (projectId: string) =>
+  req<{
+    locations: VisualLocation[];
+    backend: string;
+    lora_train_configured?: boolean;
+  }>(`/api/projects/${projectId}/visual/locations`);
+
+export const startVisualLocationBootstrap = (
+  projectId: string,
+  body?: { location_ids?: string[] },
+) =>
+  req<{ id: string; status: string; kind?: string }>(
+    `/api/projects/${projectId}/visual/locations/bootstrap`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    },
+  );
+
+export const confirmVisualLocationBootstrap = (
+  projectId: string,
+  locationId: string,
+) =>
+  req<{ location_id: string; bootstrap_status: string; train_status: string }>(
+    `/api/projects/${projectId}/visual/locations/${locationId}/bootstrap/confirm`,
+    { method: "POST" },
+  );
+
+export const skipVisualLocationBootstrap = (
+  projectId: string,
+  locationId: string,
+) =>
+  req<{ location_id: string; bootstrap_status: string }>(
+    `/api/projects/${projectId}/visual/locations/${locationId}/bootstrap/skip`,
+    { method: "POST" },
+  );
+
+export const swapVisualLocationBootstrapLookLock = (
+  projectId: string,
+  locationId: string,
+  body: { filename: string; folder?: string; denoise?: number },
+) =>
+  req<{
+    location_id: string;
+    bootstrap_status: string;
+    swapped_from: { folder: string; file: string };
+  }>(
+    `/api/projects/${projectId}/visual/locations/${locationId}/bootstrap/swap-look-lock`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+
+export const visualLocationFileUrl = (
+  projectId: string,
+  locationId: string,
+  folder: string,
+  filename: string,
+) =>
+  `/api/projects/${projectId}/visual/locations/${locationId}/files/${folder}/${filename}`;
+
 export const setVisualLookLock = (
   projectId: string,
   characterId: string,
@@ -470,6 +560,7 @@ export const getVisualJob = (projectId: string, jobId: string) =>
     progress_total?: number;
     progress_note?: string | null;
     current_character_id?: string | null;
+    current_location_id?: string | null;
     bootstrap_step?: string | null;
     items?: Array<{
       character_id: string;
@@ -487,6 +578,7 @@ export const getVisualJob = (projectId: string, jobId: string) =>
     error?: string | null;
     result?: unknown;
   }>(`/api/projects/${projectId}/visual/jobs/${jobId}`);
+
 
 export const curateVisualCharacter = (
   projectId: string,

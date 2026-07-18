@@ -30,12 +30,39 @@ class ImageBackend(Protocol):
         height: int = 1024,
         lora_name: str | None = None,
         lora_strength: float = 0.75,
+        loras: list[dict[str, Any]] | None = None,
         ref_image: Path | None = None,
         denoise: float = 1.0,
         cfg: float | None = None,
     ) -> Path: ...
 
     def healthy(self) -> bool: ...
+
+
+def _normalize_loras(
+    *,
+    lora_name: str | None,
+    lora_strength: float,
+    loras: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    if loras:
+        out: list[dict[str, Any]] = []
+        for item in loras:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "strength": float(item.get("strength") or lora_strength),
+                }
+            )
+        return out
+    if lora_name and str(lora_name).strip():
+        return [{"name": str(lora_name).strip(), "strength": float(lora_strength)}]
+    return []
 
 
 class StubImageBackend:
@@ -55,6 +82,7 @@ class StubImageBackend:
         height: int = 1024,
         lora_name: str | None = None,
         lora_strength: float = 0.75,
+        loras: list[dict[str, Any]] | None = None,
         ref_image: Path | None = None,
         denoise: float = 1.0,
         cfg: float | None = None,
@@ -64,6 +92,12 @@ class StubImageBackend:
             from PIL import Image, ImageDraw
         except ImportError:
             raise RuntimeError("pillow_required_for_stub_backend") from None
+
+        resolved = _normalize_loras(
+            lora_name=lora_name, lora_strength=lora_strength, loras=loras
+        )
+        primary = resolved[0]["name"] if resolved else None
+        primary_strength = float(resolved[0]["strength"]) if resolved else float(lora_strength)
 
         w = max(64, int(width))
         h = max(64, int(height))
@@ -91,8 +125,8 @@ class StubImageBackend:
         if line:
             draw.text((56, y), line, fill=(230, 220, 200))
         draw.text((56, h - 64), f"seed={seed or 0} denoise={denoise}", fill=(180, 170, 150))
-        if lora_name:
-            draw.text((56, h - 36), f"lora={lora_name}", fill=(180, 170, 150))
+        if primary:
+            draw.text((56, h - 36), f"lora={primary}", fill=(180, 170, 150))
         base.save(dest, format="PNG")
         meta = dest.with_suffix(".json")
         meta.write_text(
@@ -104,8 +138,9 @@ class StubImageBackend:
                     "backend": "stub",
                     "width": w,
                     "height": h,
-                    "lora_name": lora_name,
-                    "lora_strength": lora_strength,
+                    "lora_name": primary,
+                    "lora_strength": primary_strength,
+                    "loras": resolved,
                     "ref_image": str(ref_image) if ref_image else None,
                     "denoise": denoise,
                     "cfg": cfg,
@@ -116,6 +151,41 @@ class StubImageBackend:
             encoding="utf-8",
         )
         return dest
+
+
+def _attach_lora_chain(
+    nodes: dict[str, Any],
+    *,
+    lora_name: str | None,
+    lora_strength: float,
+    loras: list[dict[str, Any]] | None,
+    model_src: list[Any],
+    clip_src: list[Any],
+    start_node_id: int = 10,
+) -> tuple[list[Any], list[Any]]:
+    """Chain one or more LoraLoader nodes; returns (model_src, clip_src)."""
+    resolved = _normalize_loras(
+        lora_name=lora_name, lora_strength=lora_strength, loras=loras
+    )
+    if not resolved:
+        return model_src, clip_src
+    prev_model = model_src
+    prev_clip = clip_src
+    for i, item in enumerate(resolved):
+        node_id = str(start_node_id + i)
+        nodes[node_id] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": item["name"],
+                "strength_model": float(item["strength"]),
+                "strength_clip": float(item["strength"]),
+                "model": prev_model,
+                "clip": prev_clip,
+            },
+        }
+        prev_model = [node_id, 0]
+        prev_clip = [node_id, 1]
+    return prev_model, prev_clip
 
 
 def build_sdxl_txt2img_workflow(
@@ -131,6 +201,7 @@ def build_sdxl_txt2img_workflow(
     filename_prefix: str = "aivp",
     lora_name: str | None = None,
     lora_strength: float = 0.75,
+    loras: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """ComfyUI API-format graph for SDXL txt2img (GuoFeng / similar)."""
     ckpt = (checkpoint or "").strip()
@@ -162,20 +233,14 @@ def build_sdxl_txt2img_workflow(
         },
     }
 
-    lora = (lora_name or "").strip()
-    if lora:
-        nodes["10"] = {
-            "class_type": "LoraLoader",
-            "inputs": {
-                "lora_name": lora,
-                "strength_model": float(lora_strength),
-                "strength_clip": float(lora_strength),
-                "model": ["4", 0],
-                "clip": ["4", 1],
-            },
-        }
-        model_src = ["10", 0]
-        clip_src = ["10", 1]
+    model_src, clip_src = _attach_lora_chain(
+        nodes,
+        lora_name=lora_name,
+        lora_strength=lora_strength,
+        loras=loras,
+        model_src=model_src,
+        clip_src=clip_src,
+    )
 
     nodes["6"] = {
         "class_type": "CLIPTextEncode",
@@ -218,6 +283,7 @@ def build_sdxl_img2img_workflow(
     filename_prefix: str = "aivp",
     lora_name: str | None = None,
     lora_strength: float = 0.75,
+    loras: list[dict[str, Any]] | None = None,
     load_image_node: str = "AIVPLoadImage",
 ) -> dict[str, Any]:
     """ComfyUI API-format SDXL img2img guided by a look-lock reference."""
@@ -263,20 +329,15 @@ def build_sdxl_img2img_workflow(
         },
     }
 
-    lora = (lora_name or "").strip()
-    if lora:
-        nodes["10"] = {
-            "class_type": "LoraLoader",
-            "inputs": {
-                "lora_name": lora,
-                "strength_model": float(lora_strength),
-                "strength_clip": float(lora_strength),
-                "model": ["4", 0],
-                "clip": ["4", 1],
-            },
-        }
-        model_src = ["10", 0]
-        clip_src = ["10", 1]
+    model_src, clip_src = _attach_lora_chain(
+        nodes,
+        lora_name=lora_name,
+        lora_strength=lora_strength,
+        loras=loras,
+        model_src=model_src,
+        clip_src=clip_src,
+        start_node_id=20,
+    )
 
     nodes["6"] = {
         "class_type": "CLIPTextEncode",
@@ -337,6 +398,7 @@ class ComfyImageBackend:
         height: int = 1024,
         lora_name: str | None = None,
         lora_strength: float = 0.75,
+        loras: list[dict[str, Any]] | None = None,
         ref_image: Path | None = None,
         denoise: float = 1.0,
         cfg: float | None = None,
@@ -373,6 +435,7 @@ class ComfyImageBackend:
                     cfg=resolved_cfg,
                     lora_name=lora_name,
                     lora_strength=lora_strength,
+                    loras=loras,
                     load_image_node="AIVPLoadImage",
                 )
             else:
@@ -386,6 +449,7 @@ class ComfyImageBackend:
                     cfg=resolved_cfg,
                     lora_name=lora_name,
                     lora_strength=lora_strength,
+                    loras=loras,
                 )
 
             submitted = client.post(
@@ -410,6 +474,7 @@ class ComfyImageBackend:
                     cfg=resolved_cfg,
                     lora_name=lora_name,
                     lora_strength=lora_strength,
+                    loras=loras,
                     load_image_node="LoadImage",
                 )
                 submitted = client.post(

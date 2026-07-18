@@ -4,25 +4,32 @@ import {
   checkVisualTrainset,
   clearVisualLookLock,
   confirmVisualBootstrap,
+  confirmVisualLocationBootstrap,
   curateVisualCharacter,
   deleteVisualFile,
   getVisualJob,
   listVisualCharacters,
+  listVisualLocations,
   packageVisualLora,
   packageVisualLoraBatch,
   probeVisualLora,
   rejectVisualLora,
   setVisualLookLock,
   skipVisualBootstrap,
+  skipVisualLocationBootstrap,
   startVisualBootstrap,
+  startVisualLocationBootstrap,
   startVisualCandidates,
   startVisualLoraTrain,
   startVisualLoraTrainBatch,
   startVisualSheets,
   swapVisualBootstrapLookLock,
+  swapVisualLocationBootstrapLookLock,
   rebuildExpressionDims,
   visualFileUrl,
+  visualLocationFileUrl,
   type VisualCharacter,
+  type VisualLocation,
 } from "../api/client";
 
 type Props = { projectId: string };
@@ -63,10 +70,13 @@ function sheetLabel(filename: string): string {
 }
 
 export function VisualPage({ projectId }: Props) {
+  const [visualTab, setVisualTab] = useState<"characters" | "locations">("characters");
   const [chars, setChars] = useState<VisualCharacter[]>([]);
+  const [locations, setLocations] = useState<VisualLocation[]>([]);
   const [backend, setBackend] = useState("stub");
   const [loraTrainConfigured, setLoraTrainConfigured] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeLocationId, setActiveLocationId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [selectedSheets, setSelectedSheets] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +123,16 @@ export function VisualPage({ projectId }: Props) {
     if (!activeId && data.characters[0]) {
       setActiveId(data.characters[0].character_id);
     }
+    try {
+      const locData = await listVisualLocations(projectId);
+      setLocations(locData.locations);
+      if (!activeLocationId && locData.locations[0]) {
+        setActiveLocationId(locData.locations[0].location_id);
+      }
+    } catch {
+      /* bible may lack locations yet */
+      setLocations([]);
+    }
   };
 
   useEffect(() => {
@@ -127,6 +147,8 @@ export function VisualPage({ projectId }: Props) {
   }, [projectId]);
 
   const active = chars.find((c) => c.character_id === activeId) || null;
+  const activeLocation =
+    locations.find((l) => l.location_id === activeLocationId) || null;
 
   useEffect(() => {
     if (!active) return;
@@ -173,7 +195,8 @@ export function VisualPage({ projectId }: Props) {
       kind = String(j.kind || kind || "");
       const isTrain =
         kind === "lora_train" || kind === "lora_train_batch";
-      const isBootstrap = kind === "visual_bootstrap";
+      const isBootstrap =
+        kind === "visual_bootstrap" || kind === "visual_location_bootstrap";
       const done = Number(j.progress_done || 0);
       const total = Number(j.progress_total || 0);
       const note = typeof j.progress_note === "string" ? j.progress_note : null;
@@ -192,7 +215,9 @@ export function VisualPage({ projectId }: Props) {
           ? note ||
             (total > 0
               ? `初始化训练集 ${done}/${total}${j.bootstrap_step ? ` · ${j.bootstrap_step}` : ""}`
-              : "初始化视觉训练集…")
+              : kind === "visual_location_bootstrap"
+                ? "初始化地点训练集…"
+                : "初始化视觉训练集…")
           : total > 0
             ? done < total
               ? `正在生成第 ${done + 1}/${total} 张（已完成 ${done}）`
@@ -204,7 +229,7 @@ export function VisualPage({ projectId }: Props) {
           total: Math.max(total, 1),
           note: note || defaultNote,
           kind,
-          characterId: j.current_character_id || null,
+          characterId: j.current_character_id || j.current_location_id || null,
           step: j.bootstrap_step || null,
           items: Array.isArray(j.items) ? j.items : undefined,
         });
@@ -241,7 +266,9 @@ export function VisualPage({ projectId }: Props) {
       // Keep batch train panel so users can compare per-character results.
       // Keep bootstrap progress briefly so confirm UI can follow refresh.
       keepProgress =
-        kind === "lora_train_batch" || kind === "visual_bootstrap";
+        kind === "lora_train_batch" ||
+        kind === "visual_bootstrap" ||
+        kind === "visual_location_bootstrap";
       if (done.status === "failed") throw new Error(done.error || "visual job failed");
       if (done.error && String(done.error).startsWith("partial_failed:")) {
         setError(`批量微调部分失败：${done.error}`);
@@ -264,6 +291,62 @@ export function VisualPage({ projectId }: Props) {
 
   const onBootstrapAll = () =>
     void runVisualJob(() => startVisualBootstrap(projectId, {}));
+
+  const onLocationBootstrap = () =>
+    void runVisualJob(() =>
+      startVisualLocationBootstrap(projectId, {
+        location_ids: activeLocationId ? [activeLocationId] : undefined,
+      }),
+    );
+
+  const onLocationBootstrapAll = () =>
+    void runVisualJob(() => startVisualLocationBootstrap(projectId, {}));
+
+  const onConfirmLocationBootstrap = async () => {
+    if (!activeLocation) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await confirmVisualLocationBootstrap(projectId, activeLocation.location_id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSkipLocationBootstrap = async () => {
+    if (!activeLocation) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await skipVisualLocationBootstrap(projectId, activeLocation.location_id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSwapLocationBootstrapLock = async (filename: string) => {
+    if (!activeLocation) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await swapVisualLocationBootstrapLookLock(
+        projectId,
+        activeLocation.location_id,
+        { filename, folder: "look_lock_archive" },
+      );
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const onConfirmBootstrap = async () => {
     if (!active) return;
@@ -671,13 +754,254 @@ export function VisualPage({ projectId }: Props) {
 
   return (
     <section className="panel">
-      <h2>角色视觉 / LoRA</h2>
+      <h2>视觉 / LoRA</h2>
       <p className="panel-lead">
-        仅 major 角色：候选 / 三视图 / 表情均可<strong>多次点击追加生成</strong>
-        （不覆盖旧图）。勾选后「确认训练集」→「训练 / 导出包」。当前后端：
+        major 角色与地点：自动定妆 / 空镜训练集 → 人工确认 → 训练。当前后端：
         <strong> {backend}</strong>
         {backend === "stub" ? "（占位出图，接好 Comfy 后改 AIVP_IMAGE_BACKEND=comfy）" : ""}。
       </p>
+      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+        <button
+          type="button"
+          className={visualTab === "characters" ? "btn btn-primary" : "btn btn-secondary"}
+          disabled={busy}
+          onClick={() => setVisualTab("characters")}
+        >
+          角色
+        </button>
+        <button
+          type="button"
+          className={visualTab === "locations" ? "btn btn-primary" : "btn btn-secondary"}
+          disabled={busy}
+          onClick={() => setVisualTab("locations")}
+        >
+          地点
+        </button>
+      </div>
+
+      {visualTab === "locations" ? (
+        <>
+          <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={onLocationBootstrap}
+            >
+              初始化地点训练集
+              {activeLocation ? `（${activeLocation.name}）` : ""}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy}
+              onClick={onLocationBootstrapAll}
+            >
+              全部 major 地点初始化
+            </button>
+            <span className="note" style={{ margin: 0 }}>
+              空镜定妆 + 多角度/时段扩展；确认前不自动训 LoRA
+            </span>
+          </div>
+          {jobProgress && (
+            <div className="bible-card" aria-label="job-progress" style={{ marginBottom: 12 }}>
+              <p className="note" role="status" style={{ marginBottom: 0 }}>
+                {jobProgress.note ||
+                  `进度 ${jobProgress.done}/${jobProgress.total}`}
+                {jobProgress.step ? ` · ${jobProgress.step}` : ""}
+              </p>
+            </div>
+          )}
+          <div className="bible-layout visual-layout">
+            <nav className="visual-char-nav" aria-label="visual-locations">
+              <ul>
+                {locations.map((l) => {
+                  const isActive = l.location_id === activeLocationId;
+                  return (
+                    <li key={l.location_id}>
+                      <button
+                        type="button"
+                        className="visual-char-item"
+                        aria-current={isActive ? "page" : undefined}
+                        onClick={() => setActiveLocationId(l.location_id)}
+                      >
+                        <span className="visual-char-name">{l.name}</span>
+                        <span className="visual-char-stats">
+                          候选 {l.candidate_count} · 表 {l.sheet_count ?? 0} · 已选{" "}
+                          {l.curated_count}
+                        </span>
+                        <span className="visual-char-flags">
+                          {l.bootstrap_status === "awaiting_confirm" ? (
+                            <span className="visual-char-flag">待确认</span>
+                          ) : null}
+                          {l.lora_ready ? (
+                            <span className="visual-char-flag is-ok">LoRA</span>
+                          ) : null}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+            <div className="stack">
+              {!activeLocation && (
+                <p className="note">暂无 major 地点，请先跑通 Story Bible。</p>
+              )}
+              {activeLocation && (
+                <>
+                  <h3 style={{ margin: 0, fontFamily: "var(--font-display)" }}>
+                    {activeLocation.name}
+                  </h3>
+                  <p className="note">
+                    trigger：<code>{activeLocation.trigger}</code> · train{" "}
+                    {activeLocation.train_status || "not_started"}
+                    {activeLocation.bootstrap_status &&
+                    activeLocation.bootstrap_status !== "not_started"
+                      ? ` · bootstrap ${activeLocation.bootstrap_status}`
+                      : ""}
+                  </p>
+                  <p className="bible-plain">
+                    {activeLocation.prompt_zh || "（无 prompt_zh）"}
+                  </p>
+                  {activeLocation.look_lock_ready && (
+                    <div className="visual-thumb" style={{ maxWidth: 280 }}>
+                      <img
+                        src={visualLocationFileUrl(
+                          projectId,
+                          activeLocation.location_id,
+                          "look_lock",
+                          "ref.png",
+                        )}
+                        alt="地点定妆"
+                        className="visual-thumb-img"
+                      />
+                      <span className="visual-char-stats">建立镜头定妆</span>
+                    </div>
+                  )}
+                  {(activeLocation.bootstrap_status === "awaiting_confirm" ||
+                    activeLocation.bootstrap_status === "look_lock_needs_review" ||
+                    activeLocation.bootstrap_status ===
+                      "description_needs_review") && (
+                    <div className="bible-card" aria-label="location-bootstrap-review">
+                      <h4 style={{ marginTop: 0 }}>地点训练集待确认</h4>
+                      {!!(activeLocation.bootstrap_warnings || []).length && (
+                        <ul className="note">
+                          {(activeLocation.bootstrap_warnings || [])
+                            .slice(0, 8)
+                            .map((w) => (
+                              <li key={w}>{w}</li>
+                            ))}
+                        </ul>
+                      )}
+                      {!!(activeLocation.look_lock_archive || []).length && (
+                        <>
+                          <p className="note">备选定妆（点选替换）：</p>
+                          <div
+                            className="bible-cards visual-thumbs"
+                            aria-label="location-lock-archive"
+                          >
+                            {(activeLocation.look_lock_archive || []).map((name) => (
+                              <div key={name} className="visual-thumb">
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void onSwapLocationBootstrapLock(name)}
+                                  style={{
+                                    display: "block",
+                                    width: "100%",
+                                    padding: 0,
+                                    border: "1px solid var(--border)",
+                                    background: "transparent",
+                                    cursor: "pointer",
+                                    borderRadius: 8,
+                                  }}
+                                  aria-label={`换定妆 ${name}`}
+                                >
+                                  <img
+                                    src={visualLocationFileUrl(
+                                      projectId,
+                                      activeLocation.location_id,
+                                      "look_lock_archive",
+                                      name,
+                                    )}
+                                    alt={name}
+                                    className="visual-thumb-img"
+                                  />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      <div
+                        className="row"
+                        style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}
+                      >
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={
+                            busy ||
+                            activeLocation.bootstrap_status ===
+                              "description_needs_review"
+                          }
+                          onClick={() => void onConfirmLocationBootstrap()}
+                        >
+                          确认地点训练集
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={busy}
+                          onClick={() => void onSkipLocationBootstrap()}
+                        >
+                          跳过此地点
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <h4 style={{ marginBottom: 0 }}>候选空镜</h4>
+                  <div className="bible-cards visual-thumbs" aria-label="location-candidates">
+                    {activeLocation.candidates.map((name) => (
+                      <div key={name} className="visual-thumb">
+                        <img
+                          src={visualLocationFileUrl(
+                            projectId,
+                            activeLocation.location_id,
+                            "candidates",
+                            name,
+                          )}
+                          alt={name}
+                          className="visual-thumb-img"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <h4 style={{ marginBottom: 0 }}>扩展空镜</h4>
+                  <div className="bible-cards visual-thumbs" aria-label="location-sheets">
+                    {(activeLocation.sheets || []).map((name) => (
+                      <div key={name} className="visual-thumb">
+                        <img
+                          src={visualLocationFileUrl(
+                            projectId,
+                            activeLocation.location_id,
+                            "sheets",
+                            name,
+                          )}
+                          alt={name}
+                          className="visual-thumb-img"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
       <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <button
           type="button"
@@ -1374,6 +1698,8 @@ export function VisualPage({ projectId }: Props) {
           )}
         </div>
       </div>
+        </>
+      )}
 
       {lightbox && (
         <div
