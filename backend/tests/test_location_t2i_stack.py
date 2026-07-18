@@ -60,6 +60,7 @@ def test_generate_shot_with_loras_records_stack(tmp_path: Path):
         location_id="loc_1",
         character_ids=["ent_1"],
         shot_id="s1",
+        use_location_lora=True,
     )
     assert Path(out["path"]).exists()
     assert len(out["loras"]) == 2
@@ -71,3 +72,81 @@ def test_generate_shot_with_loras_records_stack(tmp_path: Path):
     assert "dukou" in (out.get("location_trigger") or "") or out["location_trigger"].endswith(
         "_loc_aivp"
     )
+
+
+def test_generate_shot_skips_location_lora_by_default(tmp_path: Path):
+    v = VisualPaths(tmp_path, "p1")
+    v.ensure()
+    loc = {"id": "loc_1", "name": "渡口", "tier": "major", "prompt_zh": "青石渡口"}
+    loc_p = ensure_location_profile(v, loc)
+    loc_p["lora_ready"] = True
+    loc_p["lora_file"] = "dukou_loc.safetensors"
+    loc_p["trigger"] = "dukou_loc_aivp"
+    save_location_profile(v, loc_p)
+    (v.location_lora_dir("loc_1") / "dukou_loc.safetensors").write_bytes(b"lora")
+
+    ch = {
+        "id": "ent_1",
+        "name": "林砚之",
+        "tier": "major",
+        "prompt_zh": "青灰布衣少年",
+        "gender_presentation": "masculine",
+    }
+    cp = ensure_profile(v, ch)
+    cp["lora_ready"] = True
+    cp["lora_file"] = "lin_aivp.safetensors"
+    save_profile(v, cp)
+    (v.lora_dir("ent_1") / "lin_aivp.safetensors").write_bytes(b"lora")
+
+    out = generate_shot_with_loras(
+        v,
+        StubImageBackend(),
+        prompt="立于埠头",
+        location_id="loc_1",
+        character_ids=["ent_1"],
+        shot_id="s1",
+    )
+    assert out.get("use_location_lora") is False
+    assert out["location_lora_file"] is None
+    assert len(out["loras"]) == 1
+    assert out["loras"][0]["name"] == "lin_aivp.safetensors"
+    assert "dukou_loc_aivp" in out["prompt"] or "青石渡口" in out["prompt"]
+
+
+def test_generate_shot_stacks_location_lora_when_enabled(tmp_path: Path):
+    v = VisualPaths(tmp_path, "p1")
+    v.ensure()
+    loc = {"id": "loc_1", "name": "渡口", "tier": "major", "prompt_zh": "青石渡口"}
+    loc_p = ensure_location_profile(v, loc)
+    loc_p["lora_ready"] = True
+    loc_p["lora_file"] = "dukou_loc.safetensors"
+    save_location_profile(v, loc_p)
+    (v.location_lora_dir("loc_1") / "dukou_loc.safetensors").write_bytes(b"lora")
+
+    ch = {
+        "id": "ent_1",
+        "name": "林砚之",
+        "tier": "major",
+        "prompt_zh": "青灰布衣少年",
+        "gender_presentation": "masculine",
+    }
+    cp = ensure_profile(v, ch)
+    cp["lora_ready"] = True
+    cp["lora_file"] = "lin_aivp.safetensors"
+    save_profile(v, cp)
+    (v.lora_dir("ent_1") / "lin_aivp.safetensors").write_bytes(b"lora")
+
+    out = generate_shot_with_loras(
+        v,
+        StubImageBackend(),
+        prompt="立于埠头",
+        location_id="loc_1",
+        character_ids=["ent_1"],
+        shot_id="s1",
+        use_location_lora=True,
+    )
+    assert out.get("use_location_lora") is True
+    assert len(out["loras"]) == 2
+    assert out["loras"][0]["name"] == "dukou_loc.safetensors"
+    assert out["loras"][1]["name"] == "lin_aivp.safetensors"
+    assert out["location_lora_file"] == "dukou_loc.safetensors"

@@ -177,8 +177,9 @@ def generate_shot_with_loras(
     negative: str | None = None,
     shot_id: str | None = None,
     location_strength: float | None = None,
+    use_location_lora: bool = False,
 ) -> dict[str, Any]:
-    """Txt2img with location LoRA first, then character LoRAs stacked."""
+    """Txt2img with optional location LoRA first, then character LoRAs stacked."""
     loras: list[dict[str, Any]] = []
     prompt_bits: list[str] = []
     loc_trigger = ""
@@ -191,7 +192,7 @@ def generate_shot_with_loras(
             prompt_bits.append(loc_trigger)
         if loc_look:
             prompt_bits.append(loc_look)
-        if loc_profile.get("lora_ready"):
+        if use_location_lora and loc_profile.get("lora_ready"):
             loc_file = _location_lora_basename(loc_profile, vpaths, location_id)
             if loc_file:
                 strength = float(
@@ -274,5 +275,6 @@ def generate_shot_with_loras(
         "loras": loras,
         "location_trigger": loc_trigger,
         "character_triggers": char_triggers,
+        "use_location_lora": bool(use_location_lora),
         "location_lora_file": loc_file,
     }
