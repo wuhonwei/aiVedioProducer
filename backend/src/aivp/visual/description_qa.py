@@ -77,6 +77,52 @@ def wardrobe_grounded(outfit: str, evidence: str) -> bool:
     return any(t in evidence for t in tokens)
 
 
+def evidence_has_wardrobe_cues(evidence: str) -> bool:
+    """True if novel evidence mentions any clothing-like token."""
+    evidence = _text(evidence)
+    if not evidence:
+        return False
+    # Reuse the clothing cue vocabulary (plus a few common verbs/nouns).
+    cues = (
+        "粗布",
+        "家常",
+        "衣衫",
+        "长衫",
+        "短衫",
+        "披风",
+        "劲装",
+        "黑衣",
+        "官服",
+        "长袍",
+        "交领",
+        "布衣",
+        "短褐",
+        "斗笠",
+        "蒙面",
+        "玉佩",
+        "穿着",
+        "身着",
+        "穿了",
+        "衣裳",
+        "袍子",
+        "甲胄",
+        "铠甲",
+        "白衣",
+        "青衣",
+        "灰衣",
+    )
+    return any(c in evidence for c in cues)
+
+
+def _wardrobe_is_inferred(profile: dict) -> bool:
+    inferred = profile.get("inferred_fields") or []
+    if not isinstance(inferred, list):
+        return False
+    return any(
+        str(x) in {"wardrobe.default", "wardrobe", "prompt_zh"} for x in inferred
+    )
+
+
 def qa_character_description(
     profile: dict,
     entity: dict | None = None,
@@ -86,6 +132,10 @@ def qa_character_description(
 ) -> dict[str, Any]:
     """Validate wardrobe/prompt against novel evidence; optionally rewrite via LLM.
 
+    Soft-pass (ok=True + warning) when wardrobe is marked inferred, or when the
+    novel evidence has no clothing cues at all — bootstrap should still generate.
+    Hard-fail only when evidence describes clothes that contradict a non-inferred look.
+
     Returns ``{ok, profile, warnings, rewrites, evidence}``.
     """
     profile = dict(profile or {})
@@ -94,9 +144,6 @@ def qa_character_description(
     rewrites = 0
     wardrobe = profile.get("wardrobe") if isinstance(profile.get("wardrobe"), dict) else {}
     outfit = _text(wardrobe.get("default"))
-
-    def _ok() -> bool:
-        return wardrobe_grounded(outfit, evidence) if evidence else bool(outfit)
 
     if not evidence:
         warnings.append("description_qa_no_evidence")
@@ -111,6 +158,20 @@ def qa_character_description(
 
     while not wardrobe_grounded(outfit, evidence) and rewrites < max(0, int(max_rewrites)):
         rewrites += 1
+        # Soft paths: inferred look, or novel never mentions clothes.
+        if _wardrobe_is_inferred(profile) or not evidence_has_wardrobe_cues(evidence):
+            warnings.append("description_qa_wardrobe_ungrounded_soft")
+            if _wardrobe_is_inferred(profile):
+                warnings.append("description_qa_inferred_wardrobe_allowed")
+            else:
+                warnings.append("description_qa_no_clothing_in_evidence")
+            return {
+                "ok": True,
+                "profile": profile,
+                "warnings": warnings,
+                "rewrites": rewrites,
+                "evidence": evidence,
+            }
         if llm is None:
             warnings.append("description_qa_wardrobe_ungrounded")
             break
@@ -148,7 +209,12 @@ def qa_character_description(
 
     ok = wardrobe_grounded(outfit, evidence)
     if not ok:
-        warnings.append("description_needs_review")
+        # After rewrite attempts: still soft-pass if inferred / no clothing evidence.
+        if _wardrobe_is_inferred(profile) or not evidence_has_wardrobe_cues(evidence):
+            warnings.append("description_qa_wardrobe_ungrounded_soft")
+            ok = True
+        else:
+            warnings.append("description_needs_review")
     return {
         "ok": ok,
         "profile": profile,

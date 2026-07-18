@@ -23,13 +23,45 @@ def test_qa_passes_when_wardrobe_in_evidence():
     assert "description_needs_review" not in out["warnings"]
 
 
-def test_qa_fails_without_llm_when_ungrounded():
+def test_qa_soft_passes_when_no_clothing_in_evidence():
+    """Novel never describes clothes — keep inferred look, do not block bootstrap."""
     profile = {
         "name": "苏婆婆",
         "prompt_zh": "苏婆婆，锦绣华服",
         "wardrobe": {"default": "锦绣华服金丝披风"},
     }
     entity = {"name": "苏婆婆", "evidence": "白发苍苍的老婆婆坐在灶前烧水"}
+    out = qa_character_description(profile, entity, llm=None, max_rewrites=2)
+    assert out["ok"] is True
+    assert "description_qa_wardrobe_ungrounded_soft" in out["warnings"]
+
+
+def test_qa_soft_passes_inferred_wardrobe_even_if_evidence_has_other_clothes():
+    profile = {
+        "name": "林砚之",
+        "prompt_zh": "林砚之，青灰布衣",
+        "wardrobe": {"default": "青灰布衣与半旧蓝布包袱"},
+        "inferred_fields": ["wardrobe.default", "prompt_zh"],
+    }
+    entity = {
+        "name": "林砚之",
+        "evidence": "林砚之背着一个半旧的蓝布包袱，站在雾里。",
+    }
+    out = qa_character_description(profile, entity, llm=None)
+    assert out["ok"] is True
+    assert "description_qa_inferred_wardrobe_allowed" in out["warnings"] or (
+        "description_qa_wardrobe_ungrounded_soft" in out["warnings"]
+    )
+
+
+def test_qa_hard_fails_when_contradicts_evidence_and_not_inferred():
+    profile = {
+        "name": "苏婆婆",
+        "prompt_zh": "苏婆婆，锦绣华服",
+        "wardrobe": {"default": "锦绣华服金丝披风"},
+        # deliberately not inferred — claimed as grounded but wrong
+    }
+    entity = {"name": "苏婆婆", "evidence": "白发苍苍的老婆婆，穿着粗布衣衫"}
     out = qa_character_description(profile, entity, llm=None, max_rewrites=2)
     assert out["ok"] is False
     assert "description_needs_review" in out["warnings"]
