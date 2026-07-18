@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
+import threading
+import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +14,26 @@ from typing import Any
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import DEFAULT_LORA_WEIGHT, save_profile
 from aivp.visual.trainset_check import check_trainset, _image_type
+
+
+def _split_train_cmd(cmd: str) -> list[str]:
+    """Split AIVP_LORA_TRAIN_CMD for subprocess.
+
+    On Windows, ``shlex.split(..., posix=False)`` keeps surrounding quotes as
+    part of each token, which makes ``python \"path\\to.py\"`` fail with
+    Errno 22. Strip those quotes after splitting.
+    """
+    posix = os.name != "nt"
+    argv = shlex.split(cmd, posix=posix)
+    if not posix:
+        cleaned: list[str] = []
+        for arg in argv:
+            if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'":
+                cleaned.append(arg[1:-1])
+            else:
+                cleaned.append(arg)
+        return cleaned
+    return argv
 
 
 def _caption_for(img: Path, profile: dict, source_folder: str) -> str:
@@ -162,6 +186,8 @@ def execute_lora_train(
     vpaths: VisualPaths,
     character_id: str,
     settings,
+    *,
+    on_progress: Callable[[int, int, str | None], None] | None = None,
 ) -> dict[str, Any]:
     """Run external trainer (blocking). Caller handles async job wrapping."""
     profile_path = vpaths.profile_json(character_id)
@@ -196,15 +222,52 @@ def execute_lora_train(
         character_id=character_id,
     )
     result["command"] = cmd
-    argv = shlex.split(cmd, posix=False)
+    argv = _split_train_cmd(cmd)
     stdout_path = vpaths.lora_dir(character_id) / "train_stdout.log"
     stderr_path = vpaths.lora_dir(character_id) / "train_stderr.log"
-    proc = subprocess.run(argv, shell=False, capture_output=True, text=True, check=False)
-    stdout_path.write_text(proc.stdout or "", encoding="utf-8")
-    stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+    if on_progress:
+        on_progress(0, 1, "正在启动训练进程…")
+
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        argv,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _pump(stream, chunks: list[str]) -> None:
+        if stream is None:
+            return
+        for line in stream:
+            chunks.append(line)
+            # Keep logs bounded in memory; full text still written at end via join.
+            if len(chunks) > 20000:
+                del chunks[:10000]
+
+    t_out = threading.Thread(target=_pump, args=(proc.stdout, stdout_chunks), daemon=True)
+    t_err = threading.Thread(target=_pump, args=(proc.stderr, stderr_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+    while proc.poll() is None:
+        elapsed = int(time.monotonic() - started)
+        if on_progress:
+            on_progress(0, 1, f"LoRA 微调进行中… 已运行 {elapsed}s（请耐心等待，通常需数十分钟）")
+        time.sleep(2.0)
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
+    stdout_text = "".join(stdout_chunks)
+    stderr_text = "".join(stderr_chunks)
+    stdout_path.write_text(stdout_text, encoding="utf-8")
+    stderr_path.write_text(stderr_text, encoding="utf-8")
     result["returncode"] = proc.returncode
-    result["stdout"] = (proc.stdout or "")[-2000:]
-    result["stderr"] = (proc.stderr or "")[-2000:]
+    result["stdout"] = stdout_text[-2000:]
+    result["stderr"] = stderr_text[-2000:]
+    if on_progress:
+        on_progress(1, 1, "训练进程已结束，正在检查输出…")
 
     loras = list(vpaths.lora_dir(character_id).glob("*.safetensors"))
     train_result = {

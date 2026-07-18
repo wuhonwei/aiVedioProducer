@@ -61,28 +61,49 @@ def sheet_denoise_for(slot_key: str, base: float, *, tuning: dict | None = None)
     if key == "turnaround_side":
         return clamp_denoise(float(tun.get("side_denoise") or 0.90), lo=0.88, hi=0.96)
     if key.startswith("expr_"):
-        return clamp_denoise(float(tun.get("expr_denoise") or (base + 0.05)), lo=0.45, hi=0.68)
+        # Face_ref locks identity; denoise must be high enough for mouth/eyes/brows
+        # to leave the locked calm face (low values make all exprs look identical).
+        # Strong emotions need extra denoise vs calm/smile.
+        per_slot = {
+            "expr_calm": 0.68,
+            "expr_smile": 0.74,
+            "expr_shy": 0.76,
+            "expr_happy": 0.80,
+            # Strong emotions: keep face_ref for framing, push denoise near-txt2img.
+            "expr_confused": 0.90,
+            "expr_sad": 0.92,
+            "expr_angry": 0.94,
+            "expr_surprised": 0.94,
+        }
+        default = max(float(base) + 0.18, float(per_slot.get(key, 0.74)))
+        tuned = tun.get("expr_denoise")
+        value = default if tuned is None else max(float(tuned), default)
+        return clamp_denoise(value, lo=0.62, hi=0.96)
     return clamp_denoise(base, lo=0.40, hi=0.75)
 
 
+def sheet_uses_look_lock_image(slot_key: str) -> bool:
+    """Front/expr can img2img; side/back must be txt2img or front pose sticks."""
+    key = (slot_key or "").lower()
+    return key not in {"turnaround_side", "turnaround_back"}
+
+
 def sheet_cfg_for(slot_key: str, *, tuning: dict | None = None) -> float:
-    """Higher CFG so view/expression prompts beat look-lock latent."""
+    """Higher CFG so view/expression prompts beat look-lock latent / priors."""
     tun = tuning or {}
     key = (slot_key or "").lower()
     if key in {"turnaround_side", "turnaround_back"}:
-        return float(tun.get("side_back_cfg") or 9.5)
+        return float(tun.get("side_back_cfg") or 12.5)
     if key.startswith("expr_"):
-        return 8.0
+        tuned = float(tun["expr_cfg"]) if tun.get("expr_cfg") is not None else None
+        if key in {"expr_angry", "expr_surprised", "expr_sad", "expr_confused"}:
+            return max(tuned if tuned is not None else 12.5, 12.5)
+        return tuned if tuned is not None else 11.0
     return 7.0
 
 
 def candidate_cfg_for() -> float:
     return 8.5
-
-
-def sheet_uses_look_lock_image(slot_key: str) -> bool:
-    """All sheet slots can use look-lock; side/back use high denoise instead of skipping."""
-    return bool(slot_key)
 
 
 def look_lock_dir(vpaths: VisualPaths, character_id: str) -> Path:
@@ -100,7 +121,13 @@ def look_lock_face_ref_path(vpaths: VisualPaths, character_id: str) -> Path | No
 
 
 def _write_face_crop(src: Path, dest: Path) -> Path:
-    """Crop top-center head region from a full-body look-lock for expression img2img."""
+    """Build a square headshot ref for expression img2img.
+
+    Candidate / look-lock refs are often tall upper-body portraits (e.g. 768×1024).
+    Padding those to a square leaves gray side bars and a tiny face — expression
+    img2img then copies that composition. Always extract a top-center square so
+    forehead→chin fills most of the canvas.
+    """
     try:
         from PIL import Image
     except ImportError as exc:
@@ -108,19 +135,42 @@ def _write_face_crop(src: Path, dest: Path) -> Path:
 
     im = Image.open(src).convert("RGB")
     w, h = im.size
-    # Anime full-body: head usually sits in the top ~35–40%.
-    crop_h = max(64, int(h * 0.40))
-    crop_w = max(64, int(min(w * 0.58, crop_h * 1.05)))
-    left = max(0, (w - crop_w) // 2)
-    top = max(0, int(h * 0.02))
-    right = min(w, left + crop_w)
-    bottom = min(h, top + crop_h)
-    face = im.crop((left, top, right, bottom))
-    side = max(face.size)
-    canvas = Image.new("RGB", (side, side), (248, 248, 248))
-    ox = (side - face.size[0]) // 2
-    oy = (side - face.size[1]) // 2
-    canvas.paste(face, (ox, oy))
+    aspect = w / max(h, 1)
+
+    if aspect >= 0.95:
+        # Near-square: slight upper zoom so medium shots become headshots.
+        side = min(w, h)
+        zoom = max(64, int(side * 0.78))
+        left = max(0, (w - zoom) // 2)
+        top = max(0, int(h * 0.03))
+        if top + zoom > h:
+            top = max(0, h - zoom)
+        face = im.crop((left, top, left + zoom, top + zoom))
+        canvas = face
+    elif aspect >= 0.55:
+        # Portrait / upper-body (incl. 3:4): tight top-center square — no side pad.
+        # ~48% of height ≈ forehead→chin with bun + slight shoulder; not chest shot.
+        side = min(w, max(64, int(h * 0.48)))
+        side = min(side, max(64, int(w * 0.85)))
+        left = max(0, (w - side) // 2)
+        top = max(0, int(h * 0.015))
+        if top + side > h:
+            top = max(0, h - side)
+        face = im.crop((left, top, left + side, top + side))
+        canvas = face
+    else:
+        # Very tall full-body: take a wide top band, then pad to square if needed.
+        crop_h = max(64, int(h * 0.42))
+        crop_w = max(64, int(min(w * 0.88, crop_h * 1.05)))
+        left = max(0, (w - crop_w) // 2)
+        top = max(0, int(h * 0.01))
+        right = min(w, left + crop_w)
+        bottom = min(h, top + crop_h)
+        face = im.crop((left, top, right, bottom))
+        side = max(face.size)
+        canvas = Image.new("RGB", (side, side), (248, 248, 248))
+        canvas.paste(face, ((side - face.size[0]) // 2, (side - face.size[1]) // 2))
+
     canvas = canvas.resize((768, 768), Image.Resampling.LANCZOS)
     dest.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(dest, format="PNG")
@@ -132,13 +182,11 @@ def ensure_face_ref(
     character_id: str,
     src: Path | None = None,
 ) -> Path:
-    """Ensure look_lock/face_ref.png exists (regenerate if missing or stale)."""
+    """Ensure look_lock/face_ref.png exists (always refresh from current ref)."""
     src = src or look_lock_ref_path(vpaths, character_id)
     if src is None or not src.exists():
         raise FileNotFoundError(f"look_lock_ref_missing:{character_id}")
     dest = look_lock_dir(vpaths, character_id) / "face_ref.png"
-    if dest.exists() and dest.stat().st_mtime >= src.stat().st_mtime:
-        return dest
     return _write_face_crop(src, dest)
 
 

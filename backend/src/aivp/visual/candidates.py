@@ -177,9 +177,9 @@ def generate_candidates(
         if should_cancel and should_cancel():
             break
 
-        def _char_progress(done: int, _total: int, base: int = done_images) -> None:
+        def _char_progress(done: int, _total: int) -> None:
             if on_progress:
-                on_progress(base + done, total_images)
+                on_progress(done_images + done, total_images)
 
         result = generate_candidates_for_character(
             vpaths,

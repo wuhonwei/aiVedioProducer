@@ -74,10 +74,12 @@ def suggest_patches(failure_tags: Counter[str], *, pass_rate: float) -> dict[str
         patches["back_denoise"] = 0.95
         patches["side_back_cfg"] = 10.0
 
-    # Expression still full body.
+    # Expression still full body → force face crop; keep denoise high enough
+    # for emotion separation (too-low denoise collapses all exprs to calm).
     if freq("full_body_instead_of_face", "bad_framing") >= 0.20:
         patches["expr_force_face_crop"] = True
-        patches["expr_denoise"] = 0.58
+        patches["expr_denoise"] = 0.72
+        patches["expr_cfg"] = 11.0
 
     if not any(
         k in patches

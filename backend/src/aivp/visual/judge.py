@@ -77,6 +77,7 @@ def build_judge_user_prompt(
         "slot": expr,
         "must": [
             "gender matches",
+            "apparent age matches age_look (elderly must look old; middle-aged not youthful idol)",
             "torso fully clothed (no shirtless / bare chest / open shirt)",
             "outfit roughly matches described guofeng clothing and colors",
             "framing matches expected_view_or_framing",
@@ -86,8 +87,16 @@ def build_judge_user_prompt(
         requirements["must"].append("face/head only — no full body, no visible legs/feet")
     if kind == "turnaround":
         requirements["must"].append("full body head-to-toe with feet visible")
+        requirements["must"].append(
+            "camera view_angle must match expected_view_or_framing exactly "
+            "(side must be 90° profile; back must show no face)"
+        )
     if kind == "candidate":
         requirements["must"].append("full body head-to-toe with feet visible")
+    if age and any(k in age for k in ("老年", "花甲", "婆婆", "五十", "沧桑", "中年")):
+        requirements["must"].append(
+            "reject youthful anime-idol face if age_look implies middle-aged or elderly"
+        )
 
     return (
         "Judge whether this image matches the character requirements.\n"
@@ -99,12 +108,13 @@ def build_judge_user_prompt(
         '"summary": string, '
         '"checks": {'
         '"gender": {"pass": bool, "note": string}, '
+        '"age": {"pass": bool, "note": string}, '
         '"clothing_covered": {"pass": bool, "note": string}, '
         '"outfit_match": {"pass": bool, "note": string}, '
         '"framing": {"pass": bool, "note": string}, '
         '"view_angle": {"pass": bool, "note": string}'
         "}, "
-        '"failure_tags": [string]  // e.g. shirtless, wrong_outfit, wrong_view_front, full_body_instead_of_face, wrong_gender, cropped_feet'
+        '"failure_tags": [string]  // e.g. shirtless, wrong_outfit, wrong_view_front, too_young, full_body_instead_of_face, wrong_gender, cropped_feet'
         "}"
     )
 
@@ -114,7 +124,7 @@ def normalize_judge_result(raw: dict[str, Any]) -> dict[str, Any]:
     tags = raw.get("failure_tags") if isinstance(raw.get("failure_tags"), list) else []
     tags = [str(t).strip() for t in tags if str(t).strip()]
     # Soft hard-fail gates from checks.
-    hard = ("clothing_covered", "gender", "framing")
+    hard = ("clothing_covered", "gender", "framing", "age", "view_angle")
     hard_fail = False
     for key in hard:
         item = checks.get(key)
@@ -126,6 +136,10 @@ def normalize_judge_result(raw: dict[str, Any]) -> dict[str, Any]:
                 tags.append("wrong_gender")
             if key == "framing" and "bad_framing" not in tags:
                 tags.append("bad_framing")
+            if key == "age" and "too_young" not in tags:
+                tags.append("too_young")
+            if key == "view_angle" and "wrong_view" not in tags:
+                tags.append("wrong_view")
     score = float(raw.get("score") or 0.0)
     score = max(0.0, min(1.0, score))
     passed = bool(raw.get("pass")) and not hard_fail and score >= 0.55

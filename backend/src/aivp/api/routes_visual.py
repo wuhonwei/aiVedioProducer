@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -84,6 +84,14 @@ class TrainBody(BaseModel):
     character_ids: list[str] | None = None
 
 
+class BatchTrainBody(BaseModel):
+    """Train many characters sequentially (one LoRA each)."""
+
+    character_ids: list[str] | None = None
+    # If true, export packages for can_train characters before training.
+    auto_package: bool = True
+
+
 class T2IBody(BaseModel):
     character_id: str
     prompt: str = ""
@@ -132,7 +140,7 @@ def list_visual_characters(
     project_id: str,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
+) -> JSONResponse:
     _require_project(db, project_id)
     bible = _load_bible(settings, project_id)
     vpaths = VisualPaths(settings.data_root, project_id)
@@ -140,8 +148,21 @@ def list_visual_characters(
     items = []
     for ch in load_major_characters(bible):
         profile = ensure_profile(vpaths, ch)
-        items.append(character_status(vpaths, profile["character_id"], profile))
-    return {"characters": items, "backend": settings.image_backend}
+        status = character_status(vpaths, profile["character_id"], profile)
+        dims = ch.get("expression_dims") if isinstance(ch.get("expression_dims"), list) else []
+        status["expression_dims"] = dims
+        status["default_expression"] = ch.get("default_expression") or profile.get(
+            "default_expression"
+        )
+        items.append(status)
+    return JSONResponse(
+        content={
+            "characters": items,
+            "backend": settings.image_backend,
+            "lora_train_configured": bool(getattr(settings, "lora_train_cmd", "") or ""),
+        },
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @router.post("/projects/{project_id}/visual/candidates", status_code=202)
@@ -218,12 +239,16 @@ def get_visual_job(
     job_id: str,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
+) -> JSONResponse:
     _require_project(db, project_id)
     path = _job_path(VisualPaths(settings.data_root, project_id), job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="visual job not found")
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @router.post("/projects/{project_id}/visual/characters/{character_id}/curate")
@@ -253,7 +278,27 @@ def trainset_check(
 ) -> dict[str, Any]:
     _require_project(db, project_id)
     vpaths = VisualPaths(settings.data_root, project_id)
-    return check_trainset(vpaths, character_id)
+    bible = _load_bible(settings, project_id)
+    ch = next(
+        (
+            c
+            for c in (bible.get("characters") or [])
+            if isinstance(c, dict) and str(c.get("id")) == character_id
+        ),
+        None,
+    )
+    dims = ch.get("expression_dims") if isinstance(ch, dict) else None
+    dim_count = None
+    if isinstance(dims, list):
+        dim_count = len(
+            [
+                d
+                for d in dims
+                if isinstance(d, dict)
+                and str(d.get("status") or "") not in {"rejected", "stale"}
+            ]
+        )
+    return check_trainset(vpaths, character_id, expression_dim_count=dim_count)
 
 
 @router.post("/projects/{project_id}/visual/characters/{character_id}/lora/package")
@@ -330,6 +375,7 @@ def start_lora_train_character(
         "status": "queued",
         "progress_done": 0,
         "progress_total": 1,
+        "progress_note": "微调任务已排队…",
         "error": None,
         "result": None,
     }
@@ -339,26 +385,234 @@ def start_lora_train_character(
     def _worker() -> None:
         data = json.loads(path.read_text(encoding="utf-8"))
         data["status"] = "running"
+        data["progress_note"] = "正在启动 LoRA 微调…"
         _write_job(path, data)
+
+        def on_progress(done: int, total: int, note: str | None = None) -> None:
+            data["progress_done"] = done
+            data["progress_total"] = total
+            if note:
+                data["progress_note"] = note
+            _write_job(path, data)
+
         try:
-            result = execute_lora_train(vpaths, character_id, settings)
+            result = execute_lora_train(
+                vpaths, character_id, settings, on_progress=on_progress
+            )
             data["progress_done"] = 1
+            data["progress_total"] = 1
             if result.get("trained"):
                 data["status"] = "succeeded"
+                data["progress_note"] = "微调完成，请试生成验证"
             else:
                 data["status"] = "failed"
                 data["error"] = result.get("stderr") or result.get("train_error") or "train_failed"
+                data["progress_note"] = "微调失败"
             data["result"] = result
             _write_job(path, data)
         except Exception as e:  # noqa: BLE001
             data["status"] = "failed"
             data["error"] = str(e)
+            data["progress_note"] = "微调失败"
             _write_job(path, data)
 
     if getattr(request.app.state, "run_jobs_inline", False):
         _worker()
     else:
         threading.Thread(target=_worker, daemon=False, name=f"aivp-lora-{job_id}").start()
+    return job
+
+
+def _resolve_batch_train_targets(
+    vpaths: VisualPaths,
+    majors: list[dict],
+    *,
+    auto_package: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return (ready_to_train items, skipped items)."""
+    ready: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for ch in majors:
+        cid = str(ch.get("id") or "")
+        name = str(ch.get("name") or cid)
+        ensure_profile(vpaths, ch)
+        package = vpaths.lora_dir(cid) / "train_package.json"
+        check = check_trainset(vpaths, cid)
+        if auto_package and not package.exists():
+            if not check.get("can_train"):
+                skipped.append(
+                    {
+                        "character_id": cid,
+                        "name": name,
+                        "status": "skipped",
+                        "error": f"trainset_not_ready:{check.get('warnings')}",
+                    }
+                )
+                continue
+            try:
+                export_train_package(vpaths, cid, require_can_train=True)
+                package = vpaths.lora_dir(cid) / "train_package.json"
+            except (FileNotFoundError, ValueError) as exc:
+                skipped.append(
+                    {
+                        "character_id": cid,
+                        "name": name,
+                        "status": "skipped",
+                        "error": f"package_failed:{exc}",
+                    }
+                )
+                continue
+        if not package.exists():
+            skipped.append(
+                {
+                    "character_id": cid,
+                    "name": name,
+                    "status": "skipped",
+                    "error": "train_package_missing",
+                }
+            )
+            continue
+        ready.append(
+            {
+                "character_id": cid,
+                "name": name,
+                "status": "queued",
+                "error": None,
+                "lora_file": None,
+            }
+        )
+    return ready, skipped
+
+
+@router.post("/projects/{project_id}/visual/lora/train/batch", status_code=202)
+def start_lora_train_batch(
+    project_id: str,
+    request: Request,
+    body: BatchTrainBody | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Queue sequential LoRA training for all package-ready majors (or given ids)."""
+    _require_project(db, project_id)
+    if not (getattr(settings, "lora_train_cmd", "") or ""):
+        raise HTTPException(status_code=400, detail="lora_train_cmd_not_configured")
+    body = body or BatchTrainBody()
+    bible = _load_bible(settings, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    vpaths.ensure()
+    majors = load_major_characters(bible)
+    if body.character_ids:
+        want = set(body.character_ids)
+        majors = [c for c in majors if c.get("id") in want]
+
+    ready, skipped = _resolve_batch_train_targets(
+        vpaths, majors, auto_package=bool(body.auto_package)
+    )
+    if not ready:
+        raise HTTPException(
+            status_code=400,
+            detail=f"no_characters_ready_to_train; skipped={len(skipped)}",
+        )
+
+    job_id = uuid.uuid4().hex[:12]
+    items = list(ready)
+    job = {
+        "id": job_id,
+        "project_id": project_id,
+        "kind": "lora_train_batch",
+        "status": "queued",
+        "progress_done": 0,
+        "progress_total": len(items),
+        "progress_note": f"批量微调已排队：共 {len(items)} 个角色",
+        "current_character_id": None,
+        "items": items,
+        "skipped": skipped,
+        "error": None,
+        "result": None,
+    }
+    path = _job_path(vpaths, job_id)
+    _write_job(path, job)
+
+    def _worker() -> None:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["status"] = "running"
+        data["progress_note"] = "批量微调开始…"
+        _write_job(path, data)
+        results: list[dict[str, Any]] = []
+        failed = 0
+        for idx, item in enumerate(list(data.get("items") or [])):
+            cid = str(item.get("character_id") or "")
+            name = str(item.get("name") or cid)
+            data["current_character_id"] = cid
+            data["items"][idx]["status"] = "running"
+            data["progress_note"] = (
+                f"正在微调 {name}（{idx + 1}/{len(data['items'])}）…"
+            )
+            _write_job(path, data)
+
+            def on_progress(
+                done: int,
+                total: int,
+                note: str | None = None,
+                *,
+                _idx: int = idx,
+                _name: str = name,
+                _n: int = len(data["items"]),
+            ) -> None:
+                # Keep character-level counters; surface trainer heartbeat in note.
+                prefix = f"[{_idx + 1}/{_n}] {_name}"
+                data["progress_note"] = f"{prefix} · {note}" if note else prefix
+                _write_job(path, data)
+
+            try:
+                result = execute_lora_train(
+                    vpaths, cid, settings, on_progress=on_progress
+                )
+                ok = bool(result.get("trained"))
+                data["items"][idx]["status"] = "succeeded" if ok else "failed"
+                data["items"][idx]["lora_file"] = result.get("lora_file")
+                data["items"][idx]["error"] = None if ok else (
+                    result.get("stderr") or result.get("train_error") or "train_failed"
+                )
+                if not ok:
+                    failed += 1
+                results.append(result)
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                data["items"][idx]["status"] = "failed"
+                data["items"][idx]["error"] = str(exc)
+                results.append({"character_id": cid, "trained": False, "error": str(exc)})
+            data["progress_done"] = idx + 1
+            data["progress_note"] = (
+                f"已完成 {idx + 1}/{len(data['items'])}："
+                f"{data['items'][idx]['status']} · {name}"
+            )
+            _write_job(path, data)
+
+        data["current_character_id"] = None
+        data["result"] = {"results": results, "failed": failed, "total": len(items)}
+        if failed == 0:
+            data["status"] = "succeeded"
+            data["progress_note"] = f"批量微调全部完成（{len(items)}）"
+        elif failed == len(items):
+            data["status"] = "failed"
+            data["error"] = f"all_failed:{failed}"
+            data["progress_note"] = f"批量微调全部失败（{failed}）"
+        else:
+            # Partial success still useful — mark succeeded with warning.
+            data["status"] = "succeeded"
+            data["error"] = f"partial_failed:{failed}"
+            data["progress_note"] = (
+                f"批量微调结束：成功 {len(items) - failed}，失败 {failed}"
+            )
+        _write_job(path, data)
+
+    if getattr(request.app.state, "run_jobs_inline", False):
+        _worker()
+    else:
+        threading.Thread(
+            target=_worker, daemon=False, name=f"aivp-lora-batch-{job_id}"
+        ).start()
     return job
 
 

@@ -12,6 +12,83 @@ from aivp.visual.paths import VisualPaths
 
 DEFAULT_LORA_WEIGHT = 0.75
 
+# Phrases that describe resting emotion — belong in default_expression, not bone structure.
+_EXPRESSION_IN_LOOK = (
+    "抿唇带笑",
+    "抿唇浅笑",
+    "面带微笑",
+    "带笑",
+    "微笑",
+    "浅笑",
+    "笑意",
+    "慈祥笑",
+)
+
+
+def default_expression_of(profile: dict) -> str:
+    return str(profile.get("default_expression") or "").strip()
+
+
+def _strip_expression_phrases(text: str) -> str:
+    out = text
+    for phrase in _EXPRESSION_IN_LOOK:
+        out = out.replace(phrase, "")
+    # Soft temperament adjectives that fight strong emotion sheets.
+    for phrase in ("温和", "柔和"):
+        out = out.replace(phrase, "")
+    return re.sub(r"[，,\s]+", "，", out).strip("，, ").strip()
+
+
+def normalize_look_fields(profile: dict) -> dict[str, Any]:
+    """Split resting expression out of structural appearance / prompt_zh.
+
+    Identity fields (face shape, hair, outfit) must not bake in a fixed smile —
+    that locks every expression sheet to the same calm/smiling mouth.
+    """
+    appearance = dict(profile.get("appearance") or {}) if isinstance(profile.get("appearance"), dict) else {}
+    default_expr = default_expression_of(profile)
+
+    mouth = str(appearance.get("mouth") or "").strip()
+    if mouth and any(p in mouth for p in _EXPRESSION_IN_LOOK):
+        if not default_expr:
+            default_expr = mouth
+        appearance["mouth"] = "自然唇形"
+
+    eyes = str(appearance.get("eyes") or "").strip()
+    if eyes:
+        cleaned_eyes = _strip_expression_phrases(eyes)
+        appearance["eyes"] = cleaned_eyes or "细眼"
+
+    face = str(appearance.get("face") or "").strip()
+    if face:
+        cleaned_face = _strip_expression_phrases(face)
+        # Re-compose structural face without baked smile.
+        shape = str(appearance.get("face_shape") or "").strip()
+        nose = str(appearance.get("nose") or "").strip()
+        brows = str(appearance.get("eyebrows") or "").strip()
+        mouth_s = str(appearance.get("mouth") or "").strip()
+        eyes_s = str(appearance.get("eyes") or "").strip()
+        parts = [p for p in (shape or None, eyes_s or None, nose or None, brows or None, mouth_s or None) if p]
+        appearance["face"] = "，".join(parts) if parts else cleaned_face
+
+    prompt_zh = str(profile.get("prompt_zh") or "").strip()
+    if prompt_zh and any(p in prompt_zh for p in _EXPRESSION_IN_LOOK):
+        # Pull first matching smile phrase into default_expression if missing.
+        if not default_expr:
+            for phrase in _EXPRESSION_IN_LOOK:
+                if phrase in prompt_zh:
+                    default_expr = phrase
+                    break
+        prompt_zh = _strip_expression_phrases(prompt_zh)
+
+    if default_expr:
+        profile["default_expression"] = default_expr
+    if appearance:
+        profile["appearance"] = appearance
+    if prompt_zh:
+        profile["prompt_zh"] = prompt_zh
+    return profile
+
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write JSON atomically so concurrent readers never see a partial file."""
@@ -111,6 +188,9 @@ def ensure_profile(vpaths: VisualPaths, character: dict) -> dict[str, Any]:
     profile["consistency_anchors"] = (
         character.get("consistency_anchors") or profile.get("consistency_anchors") or []
     )
+    if character.get("default_expression"):
+        profile["default_expression"] = character.get("default_expression")
+    profile = normalize_look_fields(profile)
     if not profile.get("trigger"):
         profile["trigger"] = slug_trigger(str(profile.get("name") or cid))
 
@@ -122,8 +202,9 @@ def ensure_profile(vpaths: VisualPaths, character: dict) -> dict[str, Any]:
         profile["lora_ready"] = profile.get("status") == "lora_ready"
     profile.setdefault("lora_weight_default", DEFAULT_LORA_WEIGHT)
     pos, neg = _anchors_from_profile(profile)
-    profile.setdefault("positive_anchor", pos)
-    profile.setdefault("negative_anchor", neg)
+    # Always refresh anchors after look-field normalize so smile phrases leave positive_anchor.
+    profile["positive_anchor"] = pos
+    profile["negative_anchor"] = neg
 
     atomic_write_json(path, profile)
     return profile
@@ -159,9 +240,10 @@ def character_status(vpaths: VisualPaths, character_id: str, profile: dict) -> d
         "look_lock": look_lock,
         "look_lock_ready": look_lock_ready,
         "lora_files": [p.name for p in loras],
-        "candidates": sorted(p.name for p in cand),
-        "curated": sorted(p.name for p in curated),
-        "sheets": sorted(p.name for p in sheets),
+        # Newest first so batch-generated thumbs appear at the top without hunting.
+        "candidates": sorted((p.name for p in cand), reverse=True),
+        "curated": sorted((p.name for p in curated), reverse=True),
+        "sheets": sorted((p.name for p in sheets), reverse=True),
         "generations": sorted((p.name for p in gens), reverse=True),
     }
 
