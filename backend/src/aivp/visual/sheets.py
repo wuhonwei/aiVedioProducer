@@ -15,7 +15,7 @@ from aivp.visual.look_lock import (
     sheet_uses_look_lock_image,
 )
 from aivp.visual.paths import VisualPaths
-from aivp.visual.profiles import ensure_profile
+from aivp.visual.profiles import ensure_profile, save_profile
 from aivp.visual.prompts import (
     EXPRESSION_SLOTS,
     TURNAROUND_SLOTS,
@@ -201,9 +201,7 @@ def generate_character_sheets(
     profile["sheets_generated_at"] = datetime.now(timezone.utc).isoformat()
     if ref_image:
         profile["sheets_used_look_lock"] = True
-    vpaths.profile_json(cid).write_text(
-        json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_profile(vpaths, profile)
     return {
         "character_id": cid,
         "files": created,

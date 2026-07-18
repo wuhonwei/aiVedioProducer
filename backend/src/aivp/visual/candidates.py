@@ -8,7 +8,7 @@ from typing import Any
 from aivp.visual.image_backend import ImageBackend, fresh_seed
 from aivp.visual.look_lock import candidate_cfg_for, candidate_denoise_for, resolve_look_lock
 from aivp.visual.paths import VisualPaths
-from aivp.visual.profiles import ensure_profile, load_major_characters
+from aivp.visual.profiles import ensure_profile, load_major_characters, save_profile
 from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
 from aivp.visual.qa_tuning import load_qa_tuning
 
@@ -141,9 +141,7 @@ def generate_candidates_for_character(
     profile["candidates_generated_at"] = datetime.now(timezone.utc).isoformat()
     if ref_image:
         profile["candidates_used_look_lock"] = True
-    vpaths.profile_json(cid).write_text(
-        json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_profile(vpaths, profile)
     return {
         "character_id": cid,
         "files": created,

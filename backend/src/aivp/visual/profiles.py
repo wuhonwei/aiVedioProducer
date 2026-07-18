@@ -1,14 +1,42 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from aivp.visual.paths import VisualPaths
 
 DEFAULT_LORA_WEIGHT = 0.75
+
+
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write JSON atomically so concurrent readers never see a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def read_profile_json(path: Path) -> dict[str, Any] | None:
+    """Load profile JSON; return None if missing/empty/corrupt (race-safe)."""
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def slug_trigger(name: str) -> str:
@@ -57,9 +85,8 @@ def ensure_profile(vpaths: VisualPaths, character: dict) -> dict[str, Any]:
     cid = str(character.get("id") or "unknown")
     vpaths.ensure_character(cid)
     path = vpaths.profile_json(cid)
-    if path.exists():
-        profile = json.loads(path.read_text(encoding="utf-8"))
-    else:
+    profile = read_profile_json(path)
+    if profile is None:
         name = str(character.get("name") or cid)
         profile = {
             "character_id": cid,
@@ -70,6 +97,7 @@ def ensure_profile(vpaths: VisualPaths, character: dict) -> dict[str, Any]:
             "lora_file": None,
         }
     # Refresh prompt anchors from bible character card.
+    profile["character_id"] = cid
     profile["name"] = character.get("name") or profile.get("name")
     profile["prompt_zh"] = character.get("prompt_zh") or profile.get("prompt_zh") or ""
     profile["gender_presentation"] = (
@@ -97,15 +125,14 @@ def ensure_profile(vpaths: VisualPaths, character: dict) -> dict[str, Any]:
     profile.setdefault("positive_anchor", pos)
     profile.setdefault("negative_anchor", neg)
 
-    path.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(path, profile)
     return profile
 
 
 def save_profile(vpaths: VisualPaths, profile: dict) -> dict:
     cid = str(profile.get("character_id") or "unknown")
     path = vpaths.profile_json(cid)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(path, profile)
     return profile
 
 

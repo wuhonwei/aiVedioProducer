@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from aivp.visual.paths import VisualPaths
-from aivp.visual.profiles import save_profile
+from aivp.visual.profiles import read_profile_json, save_profile
 
 LOOK_LOCK_FOLDERS = frozenset({"candidates", "sheets", "generations"})
 # Base for front / soft identity; view/pose slots use higher denoise on top.
@@ -162,10 +162,9 @@ def set_look_lock(
     if not src.exists():
         raise FileNotFoundError(f"look_lock_source_missing:{folder}/{filename}")
 
-    profile_path = vpaths.profile_json(character_id)
-    if not profile_path.exists():
+    profile = read_profile_json(vpaths.profile_json(character_id))
+    if profile is None:
         raise FileNotFoundError(f"profile_missing:{character_id}")
-    profile = json.loads(profile_path.read_text(encoding="utf-8"))
 
     dest_dir = look_lock_dir(vpaths, character_id)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -197,10 +196,9 @@ def set_look_lock(
 
 
 def clear_look_lock(vpaths: VisualPaths, character_id: str) -> dict[str, Any]:
-    profile_path = vpaths.profile_json(character_id)
-    if not profile_path.exists():
+    profile = read_profile_json(vpaths.profile_json(character_id))
+    if profile is None:
         raise FileNotFoundError(f"profile_missing:{character_id}")
-    profile = json.loads(profile_path.read_text(encoding="utf-8"))
     profile.pop("look_lock", None)
     save_profile(vpaths, profile)
     dest_dir = look_lock_dir(vpaths, character_id)
@@ -218,10 +216,9 @@ def resolve_look_lock(
 ) -> tuple[Path | None, float]:
     """Return (ref_png_path, denoise) when look lock is active."""
     if profile is None:
-        path = vpaths.profile_json(character_id)
-        if not path.exists():
+        profile = read_profile_json(vpaths.profile_json(character_id))
+        if profile is None:
             return None, 1.0
-        profile = json.loads(path.read_text(encoding="utf-8"))
     lock = profile.get("look_lock") if isinstance(profile.get("look_lock"), dict) else None
     ref = look_lock_ref_path(vpaths, character_id)
     if not lock or not ref:

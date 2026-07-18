@@ -27,6 +27,8 @@ from aivp.visual.profiles import (
     character_status,
     ensure_profile,
     load_major_characters,
+    read_profile_json,
+    save_profile,
 )
 from aivp.visual.sheets import generate_character_sheets
 from aivp.visual.t2i import approve_lora, generate_with_character, reject_lora
@@ -623,17 +625,14 @@ def delete_visual_file(
         if side.exists():
             side.unlink()
     # Clear look-lock pointer if the source image was deleted (ref copy remains until cleared).
-    profile_path = vpaths.profile_json(character_id)
-    if profile_path.exists():
-        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile = read_profile_json(vpaths.profile_json(character_id))
+    if profile:
         lock = profile.get("look_lock") if isinstance(profile.get("look_lock"), dict) else None
         if lock and lock.get("folder") == folder and lock.get("file") == filename:
             # Keep ref.png; only mark source missing in metadata.
             lock["source_missing"] = True
             profile["look_lock"] = lock
-            profile_path.write_text(
-                json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            save_profile(vpaths, profile)
     return {"deleted": True, "folder": folder, "filename": filename}
 
 
