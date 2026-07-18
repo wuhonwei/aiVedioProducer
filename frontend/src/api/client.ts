@@ -316,6 +316,8 @@ export type VisualCharacter = {
   lora_ready: boolean;
   train_status?: string;
   probe_status?: string;
+  bootstrap_status?: string;
+  bootstrap_warnings?: string[];
   look_lock?: {
     folder?: string;
     file?: string;
@@ -324,6 +326,7 @@ export type VisualCharacter = {
     set_at?: string;
   } | null;
   look_lock_ready?: boolean;
+  look_lock_archive?: string[];
   candidates: string[];
   curated: string[];
   sheets?: string[];
@@ -351,6 +354,49 @@ export const startVisualCandidates = (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
   });
+
+export const startVisualBootstrap = (
+  projectId: string,
+  body?: { character_ids?: string[] },
+) =>
+  req<{ id: string; status: string; kind?: string }>(
+    `/api/projects/${projectId}/visual/bootstrap`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    },
+  );
+
+export const confirmVisualBootstrap = (projectId: string, characterId: string) =>
+  req<{ character_id: string; bootstrap_status: string; train_status: string }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/bootstrap/confirm`,
+    { method: "POST" },
+  );
+
+export const skipVisualBootstrap = (projectId: string, characterId: string) =>
+  req<{ character_id: string; bootstrap_status: string }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/bootstrap/skip`,
+    { method: "POST" },
+  );
+
+export const swapVisualBootstrapLookLock = (
+  projectId: string,
+  characterId: string,
+  body: { filename: string; folder?: string; denoise?: number },
+) =>
+  req<{
+    character_id: string;
+    bootstrap_status: string;
+    swapped_from: { folder: string; file: string };
+  }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/bootstrap/swap-look-lock`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 
 export const setVisualLookLock = (
   projectId: string,
@@ -424,6 +470,7 @@ export const getVisualJob = (projectId: string, jobId: string) =>
     progress_total?: number;
     progress_note?: string | null;
     current_character_id?: string | null;
+    bootstrap_step?: string | null;
     items?: Array<{
       character_id: string;
       name: string;

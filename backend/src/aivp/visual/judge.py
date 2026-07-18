@@ -93,6 +93,12 @@ def build_judge_user_prompt(
         )
     if kind == "candidate":
         requirements["must"].append("full body head-to-toe with feet visible")
+        requirements["must"].append(
+            "plain / studio-neutral background — no busy scenery dominating the frame"
+        )
+        requirements["must"].append(
+            "outfit complete and readable on torso (sleeves/collar visible; not half-cropped)"
+        )
     if age and any(k in age for k in ("老年", "花甲", "婆婆", "五十", "沧桑", "中年")):
         requirements["must"].append(
             "reject youthful anime-idol face if age_look implies middle-aged or elderly"
@@ -112,9 +118,11 @@ def build_judge_user_prompt(
         '"clothing_covered": {"pass": bool, "note": string}, '
         '"outfit_match": {"pass": bool, "note": string}, '
         '"framing": {"pass": bool, "note": string}, '
-        '"view_angle": {"pass": bool, "note": string}'
+        '"view_angle": {"pass": bool, "note": string}, '
+        '"background_plain": {"pass": bool, "note": string}, '
+        '"outfit_complete": {"pass": bool, "note": string}'
         "}, "
-        '"failure_tags": [string]  // e.g. shirtless, wrong_outfit, wrong_view_front, too_young, full_body_instead_of_face, wrong_gender, cropped_feet'
+        '"failure_tags": [string]  // e.g. shirtless, wrong_outfit, wrong_view_front, too_young, full_body_instead_of_face, wrong_gender, cropped_feet, half_body, busy_background'
         "}"
     )
 
@@ -124,7 +132,15 @@ def normalize_judge_result(raw: dict[str, Any]) -> dict[str, Any]:
     tags = raw.get("failure_tags") if isinstance(raw.get("failure_tags"), list) else []
     tags = [str(t).strip() for t in tags if str(t).strip()]
     # Soft hard-fail gates from checks.
-    hard = ("clothing_covered", "gender", "framing", "age", "view_angle")
+    hard = (
+        "clothing_covered",
+        "gender",
+        "framing",
+        "age",
+        "view_angle",
+        "background_plain",
+        "outfit_complete",
+    )
     hard_fail = False
     for key in hard:
         item = checks.get(key)
@@ -140,9 +156,25 @@ def normalize_judge_result(raw: dict[str, Any]) -> dict[str, Any]:
                 tags.append("too_young")
             if key == "view_angle" and "wrong_view" not in tags:
                 tags.append("wrong_view")
+            if key == "background_plain" and "busy_background" not in tags:
+                tags.append("busy_background")
+            if key == "outfit_complete" and "incomplete_outfit" not in tags:
+                tags.append("incomplete_outfit")
+    # Tag aliases commonly returned by the model.
+    for alias, canon in (
+        ("half_body", "half_body"),
+        ("waist_up", "half_body"),
+        ("cropped_feet", "cropped_feet"),
+        ("portrait", "half_body"),
+    ):
+        if alias in tags and canon not in tags:
+            tags.append(canon)
     score = float(raw.get("score") or 0.0)
     score = max(0.0, min(1.0, score))
     passed = bool(raw.get("pass")) and not hard_fail and score >= 0.55
+    # Explicit half-body tags fail even if model set pass=true.
+    if any(t in tags for t in ("half_body", "cropped_feet", "bad_framing", "busy_background")):
+        passed = False
     return {
         "pass": passed,
         "score": score,
@@ -150,6 +182,30 @@ def normalize_judge_result(raw: dict[str, Any]) -> dict[str, Any]:
         "checks": checks,
         "failure_tags": tags,
     }
+
+
+def is_look_lock_eligible(judged: dict[str, Any]) -> bool:
+    """Look-lock requires full body, complete outfit, plain bg, and overall pass."""
+    if not isinstance(judged, dict) or not judged.get("pass"):
+        return False
+    tags = {str(t) for t in (judged.get("failure_tags") or [])}
+    if tags & {
+        "half_body",
+        "cropped_feet",
+        "bad_framing",
+        "busy_background",
+        "shirtless_or_revealing",
+        "incomplete_outfit",
+        "wrong_gender",
+        "too_young",
+    }:
+        return False
+    checks = judged.get("checks") if isinstance(judged.get("checks"), dict) else {}
+    for key in ("framing", "clothing_covered", "outfit_complete", "background_plain"):
+        item = checks.get(key)
+        if isinstance(item, dict) and item.get("pass") is False:
+            return False
+    return True
 
 
 def judge_image(

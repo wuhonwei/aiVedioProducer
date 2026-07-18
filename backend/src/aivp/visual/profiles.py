@@ -228,6 +228,8 @@ def character_status(vpaths: VisualPaths, character_id: str, profile: dict) -> d
     look_lock_ready = bool(
         look_lock and (vpaths.character_dir(character_id) / "look_lock" / "ref.png").exists()
     )
+    archive_dir = vpaths.character_dir(character_id) / "look_lock_archive"
+    archive = list(archive_dir.glob("*.png")) if archive_dir.exists() else []
     return {
         **profile,
         "candidate_count": len(cand),
@@ -236,9 +238,12 @@ def character_status(vpaths: VisualPaths, character_id: str, profile: dict) -> d
         "generation_count": len(gens),
         "train_status": profile.get("train_status") or "not_started",
         "probe_status": profile.get("probe_status") or "not_started",
+        "bootstrap_status": profile.get("bootstrap_status") or "not_started",
+        "bootstrap_warnings": profile.get("bootstrap_warnings") or [],
         "lora_ready": lora_ready,
         "look_lock": look_lock,
         "look_lock_ready": look_lock_ready,
+        "look_lock_archive": sorted((p.name for p in archive), reverse=True),
         "lora_files": [p.name for p in loras],
         # Newest first so batch-generated thumbs appear at the top without hunting.
         "candidates": sorted((p.name for p in cand), reverse=True),

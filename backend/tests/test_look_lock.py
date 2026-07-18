@@ -52,11 +52,20 @@ def test_set_look_lock_and_candidates_use_ref(tmp_path: Path):
 
     again = generate_candidates_for_character(vpaths, character, backend, count=2)
     assert again["look_lock"] is True
-    assert 0.60 <= float(again["denoise"]) <= 0.78
+    # Full-body ref + moderate denoise: outfit lock first, mild stance change.
+    assert 0.50 <= float(again["denoise"]) <= 0.72
     meta = (vpaths.candidates_dir("ent_0001") / again["files"][0]).with_suffix(".json")
     payload = __import__("json").loads(meta.read_text(encoding="utf-8"))
     assert payload.get("ref_image")
-    assert float(payload.get("denoise") or 0) >= 0.60
+    ref_name = str(payload.get("ref_image") or "").replace("\\", "/").lower()
+    assert ref_name.endswith("/ref.png") or payload.get("look_lock_ref_kind") == "full"
+    assert float(payload.get("denoise") or 0) <= 0.72
+    prompt = (vpaths.candidates_dir("ent_0001") / again["files"][0]).with_suffix(".txt").read_text(
+        encoding="utf-8"
+    )
+    assert "青灰长衫" in prompt or "outfit" in prompt.lower() or "wardrobe" in prompt.lower()
+    assert "full body" in prompt.lower() or "head to toe" in prompt.lower()
+    assert "same" in prompt.lower() and "outfit" in prompt.lower()
 
     from aivp.visual.sheets import generate_character_sheets
 

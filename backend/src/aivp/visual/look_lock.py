@@ -9,7 +9,9 @@ from typing import Any
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import read_profile_json, save_profile
 
-LOOK_LOCK_FOLDERS = frozenset({"candidates", "sheets", "generations"})
+LOOK_LOCK_FOLDERS = frozenset(
+    {"candidates", "sheets", "generations", "curated", "look_lock_archive"}
+)
 # Base for front / soft identity; view/pose slots use higher denoise on top.
 DEFAULT_LOOK_LOCK_DENOISE = 0.55
 
@@ -24,31 +26,53 @@ def candidate_denoise_for(
     *,
     index: int = 0,
     tuning: dict | None = None,
+    ref_kind: str = "full",
 ) -> float:
-    """Balance pose change vs outfit lock; too-high denoise rewrites clothes."""
+    """Balance pose change vs outfit lock; too-high denoise rewrites clothes.
+
+    Full-body look-lock refs must stay in a lower denoise band so costume sticks.
+    ``ref_kind="face"`` (sheets/expr) may sit higher.
+    """
     tun = tuning or {}
-    lo = float(tun.get("candidate_denoise_lo") or 0.60)
-    hi = float(tun.get("candidate_denoise_hi") or 0.78)
+    if (ref_kind or "full").lower() == "face":
+        lo = float(tun.get("candidate_denoise_lo") or 0.72)
+        hi = float(tun.get("candidate_denoise_hi") or 0.88)
+        hi = max(hi, 0.78)
+        lo = min(lo, hi - 0.02)
+        boost = 0.14
+    else:
+        # Full ref: prioritize outfit lock; only mild stance / camera drift.
+        lo = float(tun.get("candidate_denoise_lo") or 0.52)
+        hi = float(tun.get("candidate_denoise_hi") or 0.66)
+        hi = min(hi, 0.70)
+        lo = min(lo, hi - 0.02)
+        boost = 0.06
     v = (view or "").lower()
-    boost = 0.12
-    if any(
-        k in v
-        for k in (
-            "walk",
-            "bow",
-            "wave",
-            "point",
-            "cross",
-            "three quarter",
-            "side",
-            "profile",
-            "turn",
-        )
-    ):
-        boost = 0.18
-    elif any(k in v for k in ("hip", "clasp", "greeting")):
-        boost = 0.15
-    jitter = ((index % 5) - 2) * 0.015
+    if (ref_kind or "full").lower() != "face":
+        if any(k in v for k in ("three quarter", "turn", "contrapposto", "side")):
+            boost = 0.08
+        elif any(k in v for k in ("walk", "wave", "bow", "point", "cross", "hip")):
+            # Aggressive actions fight the lock photo — keep denoise low.
+            boost = 0.04
+    else:
+        if any(
+            k in v
+            for k in (
+                "walk",
+                "bow",
+                "wave",
+                "point",
+                "cross",
+                "three quarter",
+                "side",
+                "profile",
+                "turn",
+            )
+        ):
+            boost = 0.18
+        elif any(k in v for k in ("hip", "clasp", "greeting")):
+            boost = 0.15
+    jitter = ((index % 5) - 2) * 0.01
     return clamp_denoise(base + boost + jitter, lo=lo, hi=hi)
 
 
@@ -102,7 +126,11 @@ def sheet_cfg_for(slot_key: str, *, tuning: dict | None = None) -> float:
     return 7.0
 
 
-def candidate_cfg_for() -> float:
+def candidate_cfg_for(*, ref_kind: str = "full") -> float:
+    # Face-ref candidates need stronger prompt pull so action + wardrobe beat the
+    # headshot latent (especially the blank lower body).
+    if (ref_kind or "full").lower() == "face":
+        return 10.5
     return 8.5
 
 
@@ -188,6 +216,40 @@ def ensure_face_ref(
         raise FileNotFoundError(f"look_lock_ref_missing:{character_id}")
     dest = look_lock_dir(vpaths, character_id) / "face_ref.png"
     return _write_face_crop(src, dest)
+
+
+def ensure_candidate_face_ref(
+    vpaths: VisualPaths,
+    character_id: str,
+    src: Path | None = None,
+) -> Path:
+    """Build a 768×1024 canvas with face on top and neutral lower body.
+
+    Full-body look-lock ``ref.png`` pins pose under img2img. Stretching a square
+    face crop to 3:4 also imprints a weird prior. Paste the headshot in the upper
+    band and leave the torso/legs as neutral fill so denoise can invent new poses
+    while identity stays anchored to the face.
+    """
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("pillow_required_for_face_crop") from exc
+
+    face_path = ensure_face_ref(vpaths, character_id, src)
+    face = Image.open(face_path).convert("RGB")
+    w, h = 768, 1024
+    canvas = Image.new("RGB", (w, h), (236, 232, 224))
+    # Upper ~42% holds the face; leave room for full-body generation below.
+    face_h = max(256, int(h * 0.42))
+    face_w = max(256, int(min(w * 0.88, face_h)))
+    face_resized = face.resize((face_w, face_h), Image.Resampling.LANCZOS)
+    left = (w - face_w) // 2
+    top = max(0, int(h * 0.02))
+    canvas.paste(face_resized, (left, top))
+    dest = look_lock_dir(vpaths, character_id) / "candidate_face_ref.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dest, format="PNG")
+    return dest
 
 
 def set_look_lock(

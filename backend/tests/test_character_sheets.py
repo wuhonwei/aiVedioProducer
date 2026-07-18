@@ -412,6 +412,32 @@ def test_heiyiren_mask_and_black_outfit_lock():
     assert "blue clothes" in neg or "teal" in neg
 
 
+def test_candidate_prompt_leads_with_full_body_for_elder():
+    """Elder face tokens must not bury framing — otherwise Guofeng yields bust shots."""
+    from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
+
+    su = {
+        "trigger": "su_popo_aivp",
+        "name": "苏婆婆",
+        "prompt_zh": "苏婆婆，女性，花甲前后老年面相，白发，国风动画角色定妆",
+        "gender_presentation": "feminine",
+        "age_look": "花甲前后老年面相",
+        "wardrobe": {"default": "粗布家常衣衫", "colors": ["米褐", "灰白"]},
+    }
+    prompt = build_candidate_prompt(
+        su, "solo, 1person, full body, head to toe, feet visible, facing camera, standing"
+    )
+    low = prompt.lower()
+    # Framing must appear early (before the long look string dominates).
+    head = low[:220]
+    assert "full body" in head or "head to toe" in head
+    assert "wide shot" in low or "entire figure" in low or "shoes" in low
+    assert "martial outfit" not in low
+    neg = candidate_negative_for(su)
+    assert "half body" in neg.lower() or "waist up" in neg.lower()
+    assert "bust shot" in neg.lower() or "portrait" in neg.lower()
+
+
 def test_age_lock_su_popo_and_chen_shouyi():
     from aivp.visual.prompts import (
         age_band,

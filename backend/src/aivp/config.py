@@ -49,3 +49,10 @@ class Settings(BaseSettings):
     ollama_vision_model: str = "qwen2.5vl:7b"
     visual_qa_pass_rate: float = 0.60
     visual_qa_max_rounds: int = 3
+    # Auto trainset bootstrap
+    bootstrap_lock_candidate_count: int = 14
+    bootstrap_lock_batch_retries: int = 3
+    bootstrap_slot_retries: int = 3
+    bootstrap_desc_rewrite_retries: int = 3
+    bootstrap_archive_top_k: int = 3
+    bootstrap_plain_background: bool = True

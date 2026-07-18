@@ -75,6 +75,9 @@ _WARDROBE_EN_RULES: list[tuple[str, str]] = [
     ("劲装", "martial tight outfit"),
     ("官服", "official robe"),
     ("布衣", "plain cloth robe"),
+    ("粗布", "coarse homespun cloth"),
+    ("家常", "everyday commoner clothes"),
+    ("衣衫", "simple tunic robe"),
     ("短褐", "coarse short jacket"),
     ("绣裙", "embroidered skirt"),
     ("裙", "skirt"),
@@ -137,8 +140,11 @@ def wardrobe_english_tokens(outfit_zh: str, *, colors: list[str] | None = None) 
         )
     out = [
         "wearing " + " ".join(hits),
-        "guofeng martial outfit",
+        "guofeng traditional outfit",
     ]
+    # Keep martial tag only when the outfit is actually combat gear.
+    if any(k in text for k in ("劲装", "短打", "夜行", "刺客")):
+        out.append("guofeng martial outfit")
     if color_lock:
         out.append(color_lock)
     return out
@@ -527,8 +533,18 @@ def gender_lock_positive(
         return f"solo, 1person, masked figure, face covered, {age_pos}"
     if band == "elder":
         if gender == "female":
+            if view in {"full_body", "candidate", "full"}:
+                return (
+                    f"solo, 1oldwoman, elderly woman full body standing, "
+                    f"grandmother figure, gray white hair, {age_pos}"
+                )
             return f"solo, 1oldwoman, elderly woman, aged female face, {age_pos}"
         if gender == "male":
+            if view in {"full_body", "candidate", "full"}:
+                return (
+                    f"solo, 1oldman, elderly man full body standing, "
+                    f"aged gentleman figure, gray white hair, {age_pos}"
+                )
             return f"solo, 1oldman, elderly man, aged male face, {age_pos}"
         return f"solo, 1person, {age_pos}"
     if band == "middle":
@@ -597,7 +613,11 @@ def candidate_negative_for(profile: dict) -> str:
             age_look=str(profile.get("age_look") or ""),
             text_hints=look,
             name=name,
-        )
+        ),
+        # Guofeng priors love elder-woman bust shots; hard-ban for candidates.
+        "half body, waist up, cowboy shot, medium shot, head and shoulders, "
+        "bust portrait, upper body portrait, facial close-up, tight crop, "
+        "cropped at waist, missing legs, missing feet, no shoes",
     ]
     cneg = concealment_lock_negative(profile, text_hints=look, name=name)
     if cneg:
@@ -606,6 +626,59 @@ def candidate_negative_for(profile: dict) -> str:
     if wneg:
         parts.append(wneg)
     return ", ".join(parts)
+
+
+def build_candidate_prompt(profile: dict, view: str) -> str:
+    """Framing first, then gender/look/wardrobe — view/framing last as reinforcement."""
+    trigger = str(profile.get("trigger") or "character_aivp").strip()
+    name = str(profile.get("name") or "").strip()
+    look = sanitized_look_text(profile)
+    age_look = str(profile.get("age_look") or "").strip()
+    gender = normalize_gender(
+        profile.get("gender_presentation"),
+        text_hints=f"{look} {name} {profile.get('prompt_zh') or ''}",
+    )
+    wardrobe_first = wardrobe_lock_tokens(profile)
+    age_boost = age_appearance_english_boost(
+        age_look=age_look,
+        appearance=profile.get("appearance") if isinstance(profile.get("appearance"), dict) else {},
+        text_hints=look,
+        name=name,
+    )
+    conceal = concealment_lock_positive(profile)
+    framing = (
+        "wide shot, full body, head to toe, feet visible, shoes visible, "
+        "entire figure in frame, standing far enough to show whole body, "
+        "space above head and below feet, not cropped"
+    )
+    parts = [
+        framing,
+        gender_lock_positive(
+            gender,
+            age_look=age_look,
+            text_hints=f"{look} {name}",
+            name=name,
+            view_mode="full_body",
+        ),
+        *conceal,
+        *age_boost,
+        *wardrobe_first,
+        trigger,
+        look,
+        *appearance_lock_tokens(profile),
+        view,
+        framing,
+        "guofeng anime style, consistent character design, masterpiece",
+    ]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        p = str(p).strip()
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return ", ".join(out)
 
 
 def sheet_negative_for(
@@ -750,48 +823,6 @@ def sanitized_look_text(
     outfit = str(wardrobe.get("default") or "").strip()
     parts = [p for p in (name, age, f"身着{outfit}" if outfit else "", "蒙面罩面遮脸", "国风动画角色定妆") if p]
     return "，".join(parts) if parts else raw
-
-
-def build_candidate_prompt(profile: dict, view: str) -> str:
-    """Gender + look + wardrobe locked early; view/framing last."""
-    trigger = str(profile.get("trigger") or "character_aivp").strip()
-    name = str(profile.get("name") or "").strip()
-    look = sanitized_look_text(profile)
-    age_look = str(profile.get("age_look") or "").strip()
-    gender = normalize_gender(
-        profile.get("gender_presentation"),
-        text_hints=f"{look} {name} {profile.get('prompt_zh') or ''}",
-    )
-    # Wardrobe English tokens first so CLIP sees clothes before pose fluff.
-    wardrobe_first = wardrobe_lock_tokens(profile)
-    age_boost = age_appearance_english_boost(
-        age_look=age_look,
-        appearance=profile.get("appearance") if isinstance(profile.get("appearance"), dict) else {},
-        text_hints=look,
-        name=name,
-    )
-    conceal = concealment_lock_positive(profile)
-    parts = [
-        gender_lock_positive(gender, age_look=age_look, text_hints=f"{look} {name}", name=name),
-        *conceal,
-        *age_boost,
-        *wardrobe_first,
-        "full body, head to toe, feet visible, entire figure in frame",
-        trigger,
-        look,
-        *appearance_lock_tokens(profile),
-        view,
-        "guofeng anime style, consistent character design, masterpiece",
-    ]
-    seen: set[str] = set()
-    out: list[str] = []
-    for p in parts:
-        p = str(p).strip()
-        if not p or p in seen:
-            continue
-        seen.add(p)
-        out.append(p)
-    return ", ".join(out)
 
 
 def _view_lock_negative(slot_key: str | None) -> str:
