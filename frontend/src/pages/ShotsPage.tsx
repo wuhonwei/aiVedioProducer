@@ -183,10 +183,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   }, [shots]);
 
   const selected = shots.find((s) => s.shot_id === selectedId) || null;
-
-  useEffect(() => {
-    selectedIdRef.current = selectedId;
-  }, [selectedId]);
+  selectedIdRef.current = selectedId;
 
   useEffect(() => {
     if (!selected) return;
