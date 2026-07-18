@@ -421,10 +421,10 @@ git commit -m "Add VisualPage locations tab for bootstrap review and confirm."
 - Load location LoRA strength from settings `location_lora_strength` when profile `lora_ready`
 - Prompt prefix: location trigger + env summary, then character triggers
 
-Stub backend: assert `lora_name` / multi-lora list passed if backend supports list; if Comfy only single LoRA today, document interim: primary location OR primary character, and TODO multi-LoRA workflow — **prefer implement multi-LoRA if `ImageBackend.generate` already accepts list; else extend signature with `loras: list[{name,strength}]`**.
+Inspect `ImageBackend.generate` / Comfy workflow first. Required outcome of this task: support `loras: list[dict]` with `{name, strength}` (location first, then characters). If Comfy workflow currently accepts only one LoRA node, extend the workflow JSON to chain multiple LoRA loaders; stub backend must record the full `loras` list for assertions.
 
-- [ ] Read current `ImageBackend.generate` signature; extend minimally for multiple LoRAs
-- [ ] Unit test with stub recording kwargs
+- [ ] Read current `ImageBackend.generate` signature; extend to `loras: list[dict[str, Any]] | None = None` (keep single `lora_name` as backward-compat wrapper)
+- [ ] Unit test with stub recording `loras` kwargs (location + one character)
 - [ ] Commit
 
 ```bash
