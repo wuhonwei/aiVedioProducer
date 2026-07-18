@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   exportShotsYaml,
   getAssetPlan,
@@ -85,6 +85,8 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   const [useLocationLora, setUseLocationLora] = useState(false);
   const [genBusy, setGenBusy] = useState(false);
   const [genPreviewUrl, setGenPreviewUrl] = useState<string | null>(null);
+  const genTokenRef = useRef(0);
+  const selectedIdRef = useRef<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -183,6 +185,10 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   const selected = shots.find((s) => s.shot_id === selectedId) || null;
 
   useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
     if (!selected) return;
     const cam = typeof selected.camera === "object" && selected.camera ? selected.camera : {};
     setDraft({
@@ -265,7 +271,10 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
 
   const onGenerateShot = async () => {
     if (!selectedId || !selected) return;
+    const shotIdAtStart = selectedId;
+    const token = ++genTokenRef.current;
     setGenBusy(true);
+    setGenPreviewUrl(null);
     setError(null);
     try {
       const cast = (selected.cast || selected.characters || []).filter(Boolean);
@@ -277,6 +286,8 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
         prompt: draft.visual_prompt || selected.visual_prompt || "",
         use_location_lora: useLocationLora,
       });
+      if (genTokenRef.current !== token) return;
+      if (selectedIdRef.current !== shotIdAtStart) return;
       const file = String(out.file || "");
       const charIds = (out.character_ids as string[] | undefined) || cast;
       const locId = (out.location_id as string | undefined) || selected.location_id;
@@ -286,9 +297,13 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
         setGenPreviewUrl(visualLocationFileUrl(projectId, locId, "generations", file));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (genTokenRef.current === token && selectedIdRef.current === shotIdAtStart) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setGenBusy(false);
+      if (genTokenRef.current === token) {
+        setGenBusy(false);
+      }
     }
   };
 
