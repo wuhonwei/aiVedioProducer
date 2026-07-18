@@ -31,7 +31,12 @@ from aivp.visual.profiles import (
     save_profile,
 )
 from aivp.visual.sheets import generate_character_sheets
-from aivp.visual.t2i import approve_lora, generate_with_character, reject_lora
+from aivp.visual.t2i import (
+    approve_lora,
+    generate_shot_with_loras,
+    generate_with_character,
+    reject_lora,
+)
 from aivp.visual.trainset_check import check_trainset
 
 _VISUAL_FOLDERS = frozenset(
@@ -101,10 +106,13 @@ class BatchTrainBody(BaseModel):
 
 
 class T2IBody(BaseModel):
-    character_id: str
+    character_id: str | None = None
+    character_ids: list[str] = []
+    location_id: str | None = None
     prompt: str = ""
     shot_id: str | None = None
     is_probe: bool = False
+    use_location_lora: bool = False
 
 
 class ProbeRejectBody(BaseModel):
@@ -755,6 +763,27 @@ def t2i(
     _require_project(db, project_id)
     vpaths = VisualPaths(settings.data_root, project_id)
     backend = get_image_backend(settings)
+    char_ids = list(body.character_ids or [])
+    if not char_ids and body.character_id:
+        char_ids = [body.character_id]
+    use_shot_stack = (not body.is_probe) and (
+        bool(body.location_id) or bool(body.character_ids)
+    )
+    if use_shot_stack:
+        try:
+            return generate_shot_with_loras(
+                vpaths,
+                backend,
+                prompt=body.prompt,
+                location_id=body.location_id,
+                character_ids=char_ids or None,
+                shot_id=body.shot_id,
+                use_location_lora=bool(body.use_location_lora),
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    if not body.character_id:
+        raise HTTPException(status_code=400, detail="character_id_required")
     return generate_with_character(
         vpaths,
         body.character_id,
