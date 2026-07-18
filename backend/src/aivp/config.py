@@ -56,3 +56,10 @@ class Settings(BaseSettings):
     bootstrap_desc_rewrite_retries: int = 3
     bootstrap_archive_top_k: int = 3
     bootstrap_plain_background: bool = True
+    # Location LoRA bootstrap (empty-scene plates)
+    location_bootstrap_lock_count: int = 14
+    location_bootstrap_lock_batch_retries: int = 3
+    location_bootstrap_slot_retries: int = 3
+    location_bootstrap_desc_rewrite_retries: int = 3
+    location_bootstrap_archive_top_k: int = 3
+    location_lora_strength: float = 0.7
