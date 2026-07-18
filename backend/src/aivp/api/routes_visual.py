@@ -173,6 +173,36 @@ def list_visual_characters(
     )
 
 
+@router.get("/projects/{project_id}/visual/locations")
+def list_visual_locations(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    _require_project(db, project_id)
+    from aivp.visual.location_profiles import (
+        ensure_location_profile,
+        load_major_locations,
+        location_status,
+    )
+
+    bible = _load_bible(settings, project_id)
+    vpaths = VisualPaths(settings.data_root, project_id)
+    vpaths.ensure()
+    items = []
+    for loc in load_major_locations(bible):
+        profile = ensure_location_profile(vpaths, loc)
+        items.append(location_status(vpaths, profile["location_id"], profile))
+    return JSONResponse(
+        content={
+            "locations": items,
+            "backend": settings.image_backend,
+            "lora_train_configured": bool(getattr(settings, "lora_train_cmd", "") or ""),
+        },
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @router.post("/projects/{project_id}/visual/candidates", status_code=202)
 def start_candidates(
     project_id: str,
@@ -1073,6 +1103,206 @@ def swap_visual_bootstrap_look_lock(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+class LocationBootstrapBody(BaseModel):
+    location_ids: list[str] | None = None
+
+
+@router.post("/projects/{project_id}/visual/locations/bootstrap", status_code=202)
+def start_visual_location_bootstrap(
+    project_id: str,
+    request: Request,
+    body: LocationBootstrapBody | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Auto establishing lock + empty curated set; stops at awaiting_confirm."""
+    _require_project(db, project_id)
+    body = body or LocationBootstrapBody()
+    vpaths = VisualPaths(settings.data_root, project_id)
+    vpaths.ensure()
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id,
+        "project_id": project_id,
+        "kind": "visual_location_bootstrap",
+        "status": "queued",
+        "progress_done": 0,
+        "progress_total": 0,
+        "progress_note": None,
+        "current_location_id": None,
+        "bootstrap_step": None,
+        "error": None,
+        "result": None,
+    }
+    path = _job_path(vpaths, job_id)
+    _write_job(path, job)
+
+    def _worker() -> None:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["status"] = "running"
+        _write_job(path, data)
+        try:
+            from aivp.llm.ollama_vision_client import OllamaVisionClient
+            from aivp.visual.location_bootstrap import bootstrap_locations_project
+
+            bible = _load_bible(settings, project_id)
+            backend = get_image_backend(settings)
+            vision = None
+            if (settings.image_backend or "").lower() != "stub":
+                try:
+                    client = OllamaVisionClient(
+                        settings.ollama_base_url, settings.ollama_vision_model
+                    )
+                    if client.model_available():
+                        vision = client
+                except Exception:  # noqa: BLE001
+                    vision = None
+            entities = ProjectPaths(settings.data_root, project_id).entities_json
+
+            def on_progress(payload: dict[str, Any]) -> None:
+                data["current_location_id"] = payload.get("location_id")
+                data["bootstrap_step"] = payload.get("step")
+                msg = payload.get("message") or payload.get("step") or ""
+                data["progress_note"] = str(msg) if msg else None
+                if payload.get("done") is not None:
+                    data["progress_done"] = int(payload["done"])
+                if payload.get("total") is not None:
+                    data["progress_total"] = int(payload["total"])
+                _write_job(path, data)
+
+            result = bootstrap_locations_project(
+                vpaths,
+                bible,
+                backend,
+                settings=settings,
+                vision=vision,
+                llm=getattr(request.app.state, "llm", None),
+                entities_json=entities if entities.exists() else None,
+                location_ids=body.location_ids,
+                on_progress=on_progress,
+            )
+            data["status"] = "succeeded"
+            data["progress_note"] = "待人工确认地点训练集"
+            data["result"] = result
+            _write_job(path, data)
+        except Exception as e:  # noqa: BLE001
+            data["status"] = "failed"
+            data["error"] = str(e)
+            data["progress_note"] = None
+            _write_job(path, data)
+
+    if getattr(request.app.state, "run_jobs_inline", False):
+        _worker()
+    else:
+        threading.Thread(
+            target=_worker, daemon=False, name=f"aivp-loc-bootstrap-{job_id}"
+        ).start()
+    return job
+
+
+@router.post(
+    "/projects/{project_id}/visual/locations/{location_id}/bootstrap/confirm"
+)
+def confirm_visual_location_bootstrap(
+    project_id: str,
+    location_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    from aivp.visual.location_bootstrap import confirm_location_bootstrap
+
+    vpaths = VisualPaths(settings.data_root, project_id)
+    try:
+        return confirm_location_bootstrap(vpaths, location_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post("/projects/{project_id}/visual/locations/{location_id}/bootstrap/skip")
+def skip_visual_location_bootstrap(
+    project_id: str,
+    location_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    from aivp.visual.location_bootstrap import skip_location_bootstrap
+
+    vpaths = VisualPaths(settings.data_root, project_id)
+    try:
+        return skip_location_bootstrap(vpaths, location_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post(
+    "/projects/{project_id}/visual/locations/{location_id}/bootstrap/swap-look-lock"
+)
+def swap_visual_location_bootstrap_look_lock(
+    project_id: str,
+    location_id: str,
+    body: BootstrapSwapBody,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    from aivp.visual.location_bootstrap import swap_location_look_lock
+
+    vpaths = VisualPaths(settings.data_root, project_id)
+    try:
+        return swap_location_look_lock(
+            vpaths,
+            location_id,
+            filename=body.filename,
+            folder=body.folder,
+            denoise=body.denoise,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+_LOCATION_FOLDERS = frozenset(
+    {
+        "candidates",
+        "curated",
+        "generations",
+        "lora",
+        "sheets",
+        "look_lock",
+        "look_lock_archive",
+    }
+)
+
+
+@router.get(
+    "/projects/{project_id}/visual/locations/{location_id}/files/{folder}/{filename}"
+)
+def get_visual_location_file(
+    project_id: str,
+    location_id: str,
+    folder: str,
+    filename: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    _require_project(db, project_id)
+    if folder not in _LOCATION_FOLDERS:
+        raise HTTPException(status_code=400, detail="invalid folder")
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    vpaths = VisualPaths(settings.data_root, project_id)
+    path = vpaths.location_dir(location_id) / folder / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+    headers = None
+    if folder == "look_lock":
+        headers = {"Cache-Control": "no-store, max-age=0"}
+    return FileResponse(path, headers=headers)
 
 
 @router.post("/projects/{project_id}/visual/self-check", status_code=202)
