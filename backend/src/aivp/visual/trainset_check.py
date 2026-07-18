@@ -24,7 +24,12 @@ def _image_type(name: str) -> str:
     return "reference"
 
 
-def check_trainset(vpaths: VisualPaths, character_id: str) -> dict[str, Any]:
+def check_trainset(
+    vpaths: VisualPaths,
+    character_id: str,
+    *,
+    expression_dim_count: int | None = None,
+) -> dict[str, Any]:
     profile_path = vpaths.profile_json(character_id)
     profile = (
         json.loads(profile_path.read_text(encoding="utf-8")) if profile_path.exists() else {}
@@ -82,6 +87,11 @@ def check_trainset(vpaths: VisualPaths, character_id: str) -> dict[str, Any]:
         warnings.append("turnaround_incomplete")
     if expression < 4:
         warnings.append("expression_below_recommended_4")
+    recommended_expr = 4
+    if expression_dim_count is not None and expression_dim_count > 0:
+        recommended_expr = max(2, min(int(expression_dim_count), 8))
+        if expression < recommended_expr:
+            warnings.append(f"expression_below_story_dims_{recommended_expr}")
     if candidate < 4:
         warnings.append("candidate_below_recommended_4")
     if missing_captions:
@@ -106,7 +116,7 @@ def check_trainset(vpaths: VisualPaths, character_id: str) -> dict[str, Any]:
     score += 10 if has_front else 0
     score += 5 if has_side else 0
     score += 5 if has_back else 0
-    score += 5 if expression >= 4 else 0
+    score += 5 if expression >= recommended_expr else 0
 
     return {
         "character_id": character_id,
@@ -116,6 +126,8 @@ def check_trainset(vpaths: VisualPaths, character_id: str) -> dict[str, Any]:
         "candidate_count": candidate,
         "turnaround_count": turnaround,
         "expression_count": expression,
+        "expression_dim_count": expression_dim_count,
+        "recommended_expression_count": recommended_expr,
         "has_front": has_front,
         "has_side": has_side,
         "has_back": has_back,

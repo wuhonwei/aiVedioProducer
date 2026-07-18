@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -192,3 +193,70 @@ def test_visual_api_candidates(tmp_path: Path):
     # New package endpoint requires can_train.
     bad_pkg = client.post(f"/api/projects/{pid}/visual/characters/ent_0001/lora/package")
     assert bad_pkg.status_code == 400
+
+
+def test_batch_lora_train_job_progress(tmp_path: Path):
+    """Batch train runs sequentially and reports per-character items."""
+    trainer = tmp_path / "fake_train.py"
+    trainer.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "out = Path(sys.argv[1])\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'fake.safetensors').write_bytes(b'lora')\n",
+        encoding="utf-8",
+    )
+    cmd = f'{sys.executable} "{trainer}" "{{output_dir}}"'
+    app = create_app(
+        Settings(
+            data_root=tmp_path,
+            db_url=f"sqlite:///{tmp_path / 'batch.db'}",
+            image_backend="stub",
+            lora_train_cmd=cmd,
+        )
+    )
+    app.state.run_jobs_inline = True
+    app.state.llm = FakeLlm(default={})
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"name": "batch-train"}).json()["id"]
+    paths = ProjectPaths(tmp_path, pid)
+    paths.ensure()
+    chars = [
+        {"id": "ent_0001", "name": "Lin", "tier": "major", "prompt_zh": "blue robe"},
+        {"id": "ent_0002", "name": "Chen", "tier": "major", "prompt_zh": "brown robe"},
+    ]
+    paths.auto_bible_json.write_text(
+        json.dumps({"characters": chars}, ensure_ascii=False), encoding="utf-8"
+    )
+    vpaths = VisualPaths(tmp_path, pid)
+    backend = StubImageBackend()
+    for ch in chars:
+        ensure_profile(vpaths, ch)
+        cand = generate_candidates(vpaths, {"characters": [ch]}, backend, count=4)
+        sheets = generate_character_sheets(vpaths, ch, backend)
+        sheet_names = [f["file"] for f in sheets["files"]]
+        curate_candidates(
+            vpaths,
+            ch["id"],
+            cand["characters"][0]["files"],
+            keep_sheets=sheet_names,
+        )
+        export_train_package(vpaths, ch["id"], require_can_train=True)
+
+    listed = client.get(f"/api/projects/{pid}/visual/characters").json()
+    assert listed.get("lora_train_configured") is True
+
+    job = client.post(
+        f"/api/projects/{pid}/visual/lora/train/batch", json={"auto_package": False}
+    )
+    assert job.status_code == 202, job.text
+    body = job.json()
+    assert body["kind"] == "lora_train_batch"
+    assert body["progress_total"] == 2
+
+    status = client.get(f"/api/projects/{pid}/visual/jobs/{body['id']}").json()
+    assert status["status"] == "succeeded", status
+    assert status["progress_done"] == 2
+    assert len(status["items"]) == 2
+    assert all(it["status"] == "succeeded" for it in status["items"])
+    assert all(it.get("lora_file") for it in status["items"])

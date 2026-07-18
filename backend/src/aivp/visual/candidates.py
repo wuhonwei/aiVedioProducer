@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from aivp.visual.image_backend import ImageBackend, fresh_seed
-from aivp.visual.look_lock import candidate_cfg_for, candidate_denoise_for, resolve_look_lock
+from aivp.visual.look_lock import (
+    candidate_cfg_for,
+    candidate_denoise_for,
+    resolve_look_lock,
+)
 from aivp.visual.paths import VisualPaths
 from aivp.visual.profiles import ensure_profile, load_major_characters, save_profile
 from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
@@ -14,27 +18,32 @@ from aivp.visual.qa_tuning import load_qa_tuning
 
 
 VIEW_PROMPTS = [
-    "solo, 1person, full body, head to toe, feet visible, facing camera, standing, plain background",
-    "solo, 1person, full body, head to toe, feet visible, three quarter view, standing, plain background",
-    "solo, 1person, full body, head to toe, feet visible, side profile standing, plain background",
-    "solo, 1person, full body, head to toe, feet visible, looking away, standing, soft light, plain background",
-    "solo, 1person, full body, head to toe, feet visible, slight contrapposto standing pose, plain background",
-    "solo, 1person, full body, head to toe, feet visible, walking pose, plain background",
-    "solo, 1person, full body, head to toe, feet visible, standing hands at sides, plain background",
-    "solo, 1person, full body, head to toe, feet visible, standing relaxed pose, plain background",
+    "solo, 1person, wide shot, full body, head to toe, feet visible, shoes visible, facing camera, standing, plain background",
+    "solo, 1person, wide shot, full body, head to toe, feet visible, shoes visible, three quarter view, standing, plain background",
+    "solo, 1person, wide shot, full body, head to toe, feet visible, shoes visible, side profile standing, plain background",
+    "solo, 1person, wide shot, full body, head to toe, feet visible, shoes visible, looking away, standing, soft light, plain background",
+    "solo, 1person, wide shot, full body, head to toe, feet visible, shoes visible, slight contrapposto standing pose, plain background",
+    "solo, 1person, wide shot, full body, head to toe, feet visible, shoes visible, walking pose, plain background",
+    "solo, 1person, wide shot, full body, head to toe, feet visible, shoes visible, standing hands at sides, plain background",
+    "solo, 1person, wide shot, full body, head to toe, feet visible, shoes visible, standing relaxed pose, plain background",
 ]
 
-# When look-lock is on: keep face/outfit fixed; vary action and mild camera turn.
+# Look-lock: mild camera / stance change only — dramatic actions break outfit + framing.
 LOOK_LOCK_ACTION_PROMPTS = [
-    "full body, head to toe, feet visible, facing camera, standing neutral, arms relaxed at sides, plain background",
-    "full body, head to toe, feet visible, three quarter view, waving one hand greeting pose, plain background",
-    "full body, head to toe, feet visible, facing camera, walking forward mid-step, plain background",
-    "full body, head to toe, feet visible, slight body turn, respectful bow pose, plain background",
-    "full body, head to toe, feet visible, facing camera, hands clasped in front, plain background",
-    "full body, head to toe, feet visible, three quarter view, one hand on hip standing pose, plain background",
-    "full body, head to toe, feet visible, facing camera, pointing forward with one hand, plain background",
-    "full body, head to toe, feet visible, slight three quarter turn, arms crossed standing pose, plain background",
+    "full body head to toe feet visible, facing camera, standing neutral, arms relaxed at sides, plain background",
+    "full body head to toe feet visible, slight three quarter view, standing, weight on one leg, plain background",
+    "full body head to toe feet visible, facing camera, standing hands clasped at waist, plain background",
+    "full body head to toe feet visible, mild body turn, standing respectful posture, plain background",
+    "full body head to toe feet visible, facing camera, standing relaxed contrapposto, plain background",
+    "full body head to toe feet visible, three quarter view, standing, one hand lightly at side, plain background",
+    "full body head to toe feet visible, facing camera, standing, both arms naturally at sides, plain background",
+    "full body head to toe feet visible, slight turn toward camera, standing composed pose, plain background",
 ]
+
+_FRAMING_LOCK = (
+    "full body, head to toe, feet visible, entire figure in frame, "
+    "shoes or feet on ground, not cropped at waist, not portrait crop"
+)
 
 
 def _look_lock_candidate_negative(base_neg: str) -> str:
@@ -45,10 +54,11 @@ def _look_lock_candidate_negative(base_neg: str) -> str:
         "recolored clothes, pattern change, accessory change, "
         "shirtless, bare chest, topless, nude, naked, open shirt, exposed midriff, "
         "face morph, identity drift, age change, gender change, "
-        "static copy of reference, identical pose as reference, frozen stance"
+        "half body, waist up, portrait crop, close-up, bust shot, cropped legs, "
+        "missing feet, floating limbs, detached foot, extra limbs, "
+        "armor redesign, random costume, modern clothes"
     )
     return f"{base_neg}, {extra}"
-
 
 
 def _unique_stem(prefix: str) -> str:
@@ -71,17 +81,36 @@ def generate_candidates_for_character(
     out_dir = vpaths.candidates_dir(cid)
     out_dir.mkdir(parents=True, exist_ok=True)
     created: list[str] = []
-    # No hard cap on how many times the user may generate; soft ceiling avoids runaway jobs.
     n = max(1, min(int(count), 100))
     neg = negative or candidate_negative_for(profile)
+    # Full-body look-lock ref keeps outfit; face-only canvas caused costume/framing chaos.
     ref_image, base_denoise = resolve_look_lock(vpaths, cid, profile)
-    tuning = load_qa_tuning(vpaths)
+    ref_kind = "full" if ref_image else "none"
+    tuning = dict(load_qa_tuning(vpaths) or {})
+    # Character-local bootstrap patches override project QA tuning.
+    from aivp.visual.bootstrap_tuning import load_bootstrap_tuning
+
+    bt = load_bootstrap_tuning(vpaths, cid)
+    if bt:
+        for key, value in bt.items():
+            if key == "reason_tags":
+                continue
+            if key == "extra_negative" and tuning.get("extra_negative") and value:
+                tuning["extra_negative"] = (
+                    f"{tuning['extra_negative']}, {value}"
+                )
+            else:
+                tuning[key] = value
     if ref_image:
         neg = _look_lock_candidate_negative(neg)
     if tuning.get("extra_negative"):
         neg = f"{neg}, {tuning['extra_negative']}"
+    if tuning.get("plain_background") or tuning.get("full_body_boost"):
+        neg = (
+            f"{neg}, half body, waist up, bust shot, portrait crop, "
+            "busy scenery, detailed background"
+        )
     batch = _unique_stem("cand")
-    # New base each batch so Comfy does not replay the same 8 seeds forever.
     seed_base = fresh_seed()
     if on_progress:
         on_progress(0, n)
@@ -96,27 +125,38 @@ def generate_candidates_for_character(
             view = VIEW_PROMPTS[i % len(VIEW_PROMPTS)]
         prompt = build_candidate_prompt(profile, view)
         denoise = 1.0
-        cfg = 8.0
+        # Higher CFG so full-body framing beats elder-face portrait priors.
+        cfg = float(tuning.get("candidate_cfg") or (10.5 if not ref_image else 8.0))
         if ref_image:
-            denoise = candidate_denoise_for(view, base_denoise, index=i, tuning=tuning)
+            denoise = candidate_denoise_for(
+                view, base_denoise, index=i, tuning=tuning, ref_kind="full"
+            )
             used_denoises.append(denoise)
-            cfg = candidate_cfg_for()
+            cfg = float(tuning.get("candidate_cfg") or candidate_cfg_for(ref_kind="full"))
             prompt = (
-                f"{prompt}, exact same face hairstyle hair color and outfit as reference, "
-                "identical clothing colors seams accessories and fabric, "
+                f"{prompt}, {_FRAMING_LOCK}, "
+                "exact same face hairstyle hair color and outfit as reference photo, "
+                "identical clothing colors seams accessories fabric and silhouette, "
                 "fully clothed covered chest closed collar, "
-                "must change body pose gesture and stance clearly, "
-                "do not redesign wardrobe or facial features, do not keep the reference pose, "
-                "no shirtless no bare chest no revealing clothes"
+                "only mild camera angle or stance change, keep same costume, "
+                "do not redesign wardrobe or facial features, "
+                "no half-body crop, no floating limbs, no shirtless"
+            )
+        if tuning.get("full_body_boost"):
+            prompt = (
+                f"{prompt}, {_FRAMING_LOCK}, head to toe, feet and shoes clearly visible"
             )
         if tuning.get("outfit_lock_boost"):
             prompt = (
                 f"{prompt}, fully clothed, covered torso, exact wardrobe colors, "
                 "guofeng cloak or tunic as described, no bare chest"
             )
+        if tuning.get("identity_lock_boost"):
+            prompt = (
+                f"{prompt}, exact same face as character card, preserve age and gender"
+            )
         name = f"{batch}_{i+1:03d}.png"
         dest = out_dir / name
-        # Show completed count before this image so UI reads "正在生成第 i+1/n".
         if on_progress:
             on_progress(len(created), n)
         try:
@@ -134,6 +174,17 @@ def generate_candidates_for_character(
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"candidate_{i + 1}_of_{n}_failed:{exc}") from exc
         dest.with_suffix(".txt").write_text(prompt, encoding="utf-8")
+        meta_path = dest.with_suffix(".json")
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(meta, dict):
+                    meta["look_lock_ref_kind"] = ref_kind if ref_image else None
+                    meta_path.write_text(
+                        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         created.append(dest.name)
         if on_progress:
             on_progress(len(created), n)
@@ -141,14 +192,18 @@ def generate_candidates_for_character(
     profile["candidates_generated_at"] = datetime.now(timezone.utc).isoformat()
     if ref_image:
         profile["candidates_used_look_lock"] = True
+        profile["candidates_look_lock_ref_kind"] = ref_kind
     save_profile(vpaths, profile)
     return {
         "character_id": cid,
         "files": created,
         "trigger": profile["trigger"],
         "look_lock": bool(ref_image),
+        "look_lock_ref_kind": ref_kind if ref_image else None,
         "denoise": (
-            sum(used_denoises) / len(used_denoises) if used_denoises else (base_denoise if ref_image else 1.0)
+            sum(used_denoises) / len(used_denoises)
+            if used_denoises
+            else (base_denoise if ref_image else 1.0)
         ),
     }
 
@@ -177,9 +232,9 @@ def generate_candidates(
         if should_cancel and should_cancel():
             break
 
-        def _char_progress(done: int, _total: int, base: int = done_images) -> None:
+        def _char_progress(done: int, _total: int) -> None:
             if on_progress:
-                on_progress(base + done, total_images)
+                on_progress(done_images + done, total_images)
 
         result = generate_candidates_for_character(
             vpaths,

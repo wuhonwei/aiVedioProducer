@@ -329,6 +329,126 @@ input[type="file"] {
   gap: 16px;
 }
 
+.visual-layout {
+  grid-template-columns: minmax(220px, 260px) 1fr;
+  align-items: start;
+}
+
+.visual-char-nav {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 160px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.visual-char-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.visual-char-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  line-height: 1.25;
+}
+
+.visual-char-item:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.visual-char-item[aria-current="page"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.visual-char-name {
+  font-weight: 700;
+  font-size: 0.98rem;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.visual-char-stats {
+  font-size: 0.78rem;
+  color: var(--muted, #6b7280);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.visual-char-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 0;
+}
+
+.visual-char-flag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #4b5563;
+  background: #eef2f7;
+  border: 1px solid #d5dce6;
+  white-space: nowrap;
+}
+
+.visual-char-flag.is-ok {
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  border-color: #b7d8cf;
+}
+
+.visual-char-flag.is-bad {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: #e3b5b5;
+}
+
+.visual-batch-train-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.visual-batch-train-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fffdf8;
+  border: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+
 .bible-nav {
   list-style: none;
   margin: 0;
@@ -387,7 +507,7 @@ input[type="file"] {
 .visual-thumb-img {
   width: 100%;
   aspect-ratio: 3 / 4;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: 8px;
   display: block;
   background: #ebe6dc;
@@ -488,6 +608,22 @@ input[type="file"] {
 @media (max-width: 800px) {
   .bible-layout {
     grid-template-columns: 1fr;
+  }
+
+  .visual-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .visual-char-nav {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .visual-char-nav ul {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
   }
 
   .visual-thumbs {

@@ -34,25 +34,71 @@ def resolve_sheet_slots(
     *,
     group: str | None = None,
     slot_keys: list[str] | None = None,
+    expression_dims: list[dict] | None = None,
 ) -> list[tuple[str, str, str]]:
-    """Pick sheet slots: explicit keys, or group turnaround|expression|all."""
+    """Pick sheet slots: explicit keys, bible dims, or group turnaround|expression|all.
+
+    When ``expression_dims`` is non-empty, expression groups use those dims
+    (status not rejected/stale) instead of the legacy fixed 8-slot catalog.
+    """
+    dim_slots = _slots_from_expression_dims(expression_dims)
+
     if slot_keys:
         out: list[tuple[str, str, str]] = []
+        dim_by_id = {s[0]: s for s in dim_slots}
         for key in slot_keys:
-            item = ALL_SLOTS.get(key)
+            item = dim_by_id.get(key) or ALL_SLOTS.get(key)
             if item:
                 out.append(item)
+            elif key.startswith("expr_") and dim_slots:
+                # Unknown custom dim id with no framing — skip rather than fail hard
+                # if other keys resolved; collect unknowns.
+                continue
         if not out:
+            # Allow unknown expr_* with dims list framing lookup failure → error.
             raise ValueError(f"unknown_sheet_slots:{slot_keys}")
         return out
+
     g = (group or "all").strip().lower()
     if g in {"turnaround", "三视图"}:
         return list(TURNAROUND_SLOTS)
     if g in {"expression", "expressions", "表情"}:
-        return list(EXPRESSION_SLOTS)
+        return dim_slots if dim_slots else list(EXPRESSION_SLOTS)
     if g in {"all", "全部", ""}:
-        return list(TURNAROUND_SLOTS) + list(EXPRESSION_SLOTS)
+        expr = dim_slots if dim_slots else list(EXPRESSION_SLOTS)
+        return list(TURNAROUND_SLOTS) + expr
     raise ValueError(f"unknown_sheet_group:{group}")
+
+
+def _slots_from_expression_dims(
+    expression_dims: list[dict] | None,
+) -> list[tuple[str, str, str]]:
+    if not expression_dims:
+        return []
+    out: list[tuple[str, str, str]] = []
+    for dim in expression_dims:
+        if not isinstance(dim, dict):
+            continue
+        status = str(dim.get("status") or "proposed").lower()
+        if status in {"rejected", "stale"}:
+            continue
+        key = str(dim.get("id") or "").strip()
+        if not key.startswith("expr_"):
+            continue
+        label = str(dim.get("label") or key)
+        framing = str(dim.get("framing") or "").strip()
+        if not framing:
+            # Fallback to legacy library framing when id matches.
+            legacy = ALL_SLOTS.get(key)
+            framing = legacy[2] if legacy else (
+                f"{label} facial expression, facial close-up headshot, "
+                "complete face forehead to chin, both eyes visible"
+            )
+        out.append((key, label, framing))
+    out.sort(key=lambda t: t[0])
+    # Prefer calm first if present.
+    out.sort(key=lambda t: (0 if t[0] == "expr_calm" else 1, t[0]))
+    return out
 
 
 def _basename(path_str: str) -> str:
@@ -91,7 +137,13 @@ def generate_character_sheets(
     trigger = str(profile.get("trigger") or "")
     look = str(profile.get("prompt_zh") or profile.get("name") or "")
     lora = _lora_name(profile, vpaths, cid)
-    slots = resolve_sheet_slots(group=group, slot_keys=slot_keys)
+    slots = resolve_sheet_slots(
+        group=group,
+        slot_keys=slot_keys,
+        expression_dims=character.get("expression_dims")
+        if isinstance(character.get("expression_dims"), list)
+        else None,
+    )
     ref_image, base_denoise = resolve_look_lock(vpaths, cid, profile)
     tuning = load_qa_tuning(vpaths)
     created: list[dict[str, str]] = []
@@ -108,6 +160,7 @@ def generate_character_sheets(
             framing,
             gender_presentation=str(profile.get("gender_presentation") or ""),
             profile=profile,
+            slot_key=key,
         )
         use_ref = ref_image if (ref_image and sheet_uses_look_lock_image(key)) else None
         is_expr = key.startswith("expr_")
@@ -117,19 +170,31 @@ def generate_character_sheets(
             use_ref = ensure_face_ref(vpaths, cid, ref_image)
             ref_kind = "face"
             prompt = (
-                f"{prompt}, exact same face hairstyle and hair color as reference, "
-                "face-only headshot, only change facial expression, "
-                "no body no torso no hands"
-            )
-        elif use_ref and key in {"turnaround_side", "turnaround_back"}:
-            prompt = (
-                f"{prompt}, keep same face hairstyle hair color and outfit colors as reference, "
-                "MUST change camera angle to the requested view, not a front copy"
+                f"{prompt}, same person identity hairstyle and hair color as reference, "
+                "complete face fully visible forehead to chin, both eyes visible, "
+                "face-only headshot, "
+                "dramatically change facial expression to match the emotion described, "
+                "different mouth eyes and eyebrows from the reference photo, "
+                "keep identity but not the same calm face, "
+                "no body no torso no hands, no half-face crop"
             )
         elif use_ref:
             prompt = (
                 f"{prompt}, same character identity hairstyle and outfit as reference, "
                 "keep full body framing, not a copy of the reference photo"
+            )
+        elif ref_image and key in {"turnaround_side", "turnaround_back"}:
+            # Text-only identity: do not seed front look-lock latent (keeps front pose).
+            prompt = (
+                f"{prompt}, same character identity hairstyle hair color and outfit as the locked look, "
+                "exact requested camera angle only, not a front-facing copy"
+            )
+        elif is_expr and ref_image and not use_ref:
+            # Strong emotions: txt2img so face_ref calm mouth/eyes don't stick.
+            prompt = (
+                f"{prompt}, same elderly character identity hairstyle and hair color as the locked look, "
+                "face-only headshot, complete face forehead to chin, "
+                "emotion must match the expression described, exaggerated readable face"
             )
         if tuning.get("outfit_lock_boost") and not is_expr:
             prompt = (
@@ -138,13 +203,17 @@ def generate_character_sheets(
             )
         dest = out_dir / _unique_sheet_name(key)
         denoise = sheet_denoise_for(key, base_denoise, tuning=tuning) if use_ref else 1.0
-        cfg = sheet_cfg_for(key, tuning=tuning) if use_ref else 8.0
+        # Side/back always use high CFG even in txt2img mode.
+        cfg = sheet_cfg_for(key, tuning=tuning)
         # Square canvas for face headshots; portrait for full-body turnaround.
         width, height = (768, 768) if is_expr else (768, 1024)
         neg = sheet_negative_for(
             str(profile.get("gender_presentation") or ""),
             slot_key=key,
             text_hints=f"{look} {profile.get('name') or ''}",
+            age_look=str(profile.get("age_look") or ""),
+            name=str(profile.get("name") or ""),
+            profile=profile,
         )
         if tuning.get("extra_negative"):
             neg = f"{neg}, {tuning['extra_negative']}"

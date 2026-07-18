@@ -142,22 +142,128 @@ def test_visual_sheets_and_delete_api(tmp_path: Path):
     assert missing.status_code == 404
 
 
-def test_turnaround_side_back_use_high_denoise_look_lock():
+def test_turnaround_side_back_skip_look_lock_image():
     from aivp.visual.look_lock import sheet_cfg_for, sheet_denoise_for, sheet_uses_look_lock_image
 
     assert sheet_uses_look_lock_image("turnaround_front") is True
     assert sheet_uses_look_lock_image("expr_calm") is True
-    assert sheet_uses_look_lock_image("turnaround_side") is True
-    assert sheet_uses_look_lock_image("turnaround_back") is True
+    # Side/back must be txt2img — front look-lock latent keeps front pose.
+    assert sheet_uses_look_lock_image("turnaround_side") is False
+    assert sheet_uses_look_lock_image("turnaround_back") is False
+    # Strong emotions still use face_ref for framing, but with near-txt2img denoise.
+    assert sheet_uses_look_lock_image("expr_angry") is True
     assert sheet_denoise_for("turnaround_side", 0.55) >= 0.88
     assert sheet_denoise_for("turnaround_back", 0.55) >= 0.88
     assert sheet_cfg_for("turnaround_side") >= 9.0
+    assert sheet_denoise_for("expr_smile", 0.55) >= 0.68
+    assert sheet_denoise_for("expr_angry", 0.55) >= 0.88
+    assert sheet_cfg_for("expr_angry") >= 12.0
     for key, _label, framing in TURNAROUND_SLOTS:
         if key == "turnaround_side":
-            assert "side" in framing.lower()
-            assert framing.lower().startswith("strict side") or "STRICT side" in framing
+            low = framing.lower()
+            assert "side" in low and "profile" in low
+            assert "front face" in low or "no three-quarter" in low
         if key == "turnaround_back":
-            assert "rear" in framing.lower() or "behind" in framing.lower()
+            low = framing.lower()
+            assert "rear" in low or "behind" in low
+            assert "no face" in low
+
+
+def test_resolve_sheet_slots_uses_bible_expression_dims():
+    from aivp.visual.sheets import resolve_sheet_slots
+
+    dims = [
+        {
+            "id": "expr_calm",
+            "label": "平静",
+            "framing": "calm neutral face",
+            "status": "approved",
+        },
+        {
+            "id": "expr_shocked",
+            "label": "震惊",
+            "framing": "shocked wide eyes",
+            "status": "proposed",
+        },
+        {
+            "id": "expr_angry",
+            "label": "愤怒",
+            "framing": "angry",
+            "status": "stale",
+        },
+    ]
+    slots = resolve_sheet_slots(group="expression", expression_dims=dims)
+    ids = [s[0] for s in slots]
+    assert ids == ["expr_calm", "expr_shocked"]
+    assert "shocked" in slots[1][2]
+
+
+def test_resolve_sheet_slots_falls_back_to_legacy_without_dims():
+    from aivp.visual.sheets import resolve_sheet_slots
+    from aivp.visual.prompts import EXPRESSION_SLOTS
+
+    slots = resolve_sheet_slots(group="expression", expression_dims=None)
+    assert len(slots) == len(EXPRESSION_SLOTS)
+
+
+def test_expression_slots_have_distinct_cues():
+    """Each expression must carry unique mouth/eye/brow tokens for separation."""
+    cues = {
+        "expr_calm": ("neutral", "closed mouth"),
+        "expr_smile": ("smile", "upturned"),
+        "expr_happy": ("grin", "laugh"),
+        "expr_confused": ("furrow", "tilt"),
+        "expr_angry": ("frown", "glare"),
+        "expr_sad": ("teary", "downturned"),
+        "expr_surprised": ("wide eyes", "open mouth"),
+        "expr_shy": ("blush", "avert"),
+    }
+    for key, _label, framing in EXPRESSION_SLOTS:
+        low = framing.lower()
+        assert key in cues, key
+        assert any(token in low for token in cues[key]), (key, framing[:120])
+
+
+def test_expression_prompt_drops_locked_smile_mouth():
+    """Profile mouth cues like 抿唇带笑 must not fight angry/surprised prompts."""
+    from aivp.visual.prompts import build_character_prompt, build_candidate_prompt
+    from aivp.visual.profiles import normalize_look_fields
+
+    profile = {
+        "name": "苏婆婆",
+        "prompt_zh": "苏婆婆，抿唇带笑，白发髻",
+        "gender_presentation": "feminine",
+        "age_look": "花甲前后老年面相",
+        "appearance": {
+            "face": "圆润多皱脸型，温和细眼，抿唇带笑",
+            "face_shape": "圆润多皱脸型",
+            "eyes": "温和细眼",
+            "mouth": "抿唇带笑",
+            "hair": "白发髻",
+        },
+        "wardrobe": {"default": "粗布家常衣衫"},
+    }
+    normalize_look_fields(profile)
+    assert profile["default_expression"]
+    assert "带笑" in profile["default_expression"] or "抿唇" in profile["default_expression"]
+    assert "抿唇带笑" not in (profile.get("prompt_zh") or "")
+    assert profile["appearance"]["mouth"] == "自然唇形"
+
+    angry = build_character_prompt(
+        "su_aivp",
+        profile["prompt_zh"],
+        EXPRESSION_SLOTS[4][2],  # angry framing
+        gender_presentation="feminine",
+        profile=profile,
+        slot_key="expr_angry",
+    )
+    assert "抿唇带笑" not in angry
+    assert profile["default_expression"] not in angry
+    assert angry.lower().startswith("angry") or "angry furious" in angry.lower()
+    assert "frown" in angry.lower() or "glare" in angry.lower()
+
+    cand = build_candidate_prompt(profile, "front view, facing viewer")
+    assert profile["default_expression"] in cand
 
 
 def test_expression_prompts_are_face_only():
@@ -165,14 +271,17 @@ def test_expression_prompts_are_face_only():
 
     for key, _label, framing in EXPRESSION_SLOTS:
         assert "facial close-up" in framing or "headshot" in framing
+        assert "complete face" in framing or "forehead to chin" in framing
         assert "no body" in framing
         assert "full body" not in framing.lower()
+        assert "face filling the frame" not in framing  # too-tight crop prior
         prompt = build_character_prompt(
             "lin_aivp", "青灰长衫少年", framing, gender_presentation="male"
         )
         assert "face" in prompt.lower() or "headshot" in prompt.lower()
         neg = sheet_negative_for("male", slot_key=key)
         assert "full body" in neg
+        assert "half face" in neg or "cropped chin" in neg
         assert "close-up" not in neg  # must not reuse turnaround CHARACTER_NEGATIVE ban
         assert "upper body only" not in neg or "torso" in neg
 
@@ -253,10 +362,129 @@ def test_candidate_prompt_middle_aged_male_outfit_english():
     assert "cloak" in prompt
     assert "short tunic" in prompt
     assert "fully clothed" in prompt
-    assert "young man" not in prompt
+    assert "young man" not in prompt or "not young" in prompt
     neg = candidate_negative_for(profile)
     assert "shirtless" in neg
     assert "bare chest" in neg
+
+
+def test_heiyiren_mask_and_black_outfit_lock():
+    from aivp.visual.prompts import (
+        age_band,
+        build_candidate_prompt,
+        candidate_negative_for,
+        face_concealed,
+        wardrobe_english_tokens,
+    )
+
+    profile = {
+        "trigger": "heiyi_aivp",
+        "name": "黑衣人",
+        "prompt_zh": "黑衣人，男性，青壮年隐匿面相，身着紧身黑衣劲装，面巾或蒙面",
+        "gender_presentation": "masculine",
+        "age_look": "青壮年隐匿面相",
+        "appearance": {
+            "face": "瘦削长脸，冷峻细眼",
+            "hair": "黑巾束发或罩面",
+            "distinctive_marks": "面巾或蒙面",
+            "body": "精干矫健",
+        },
+        "wardrobe": {"default": "紧身黑衣劲装", "colors": ["黑", "深灰"]},
+        "consistency_anchors": ["紧身黑衣劲装", "黑巾束发或罩面", "黑衣人面部特征"],
+    }
+    assert age_band(profile["age_look"], name=profile["name"]) == "young_adult"
+    assert face_concealed(profile) is True
+    en = " ".join(
+        wardrobe_english_tokens(
+            profile["wardrobe"]["default"], colors=profile["wardrobe"]["colors"]
+        )
+    )
+    assert "black" in en
+    assert "no blue" in en
+    prompt = build_candidate_prompt(profile, "full body")
+    assert "masked" in prompt or "face covered" in prompt or "蒙面" in prompt
+    assert "black" in prompt.lower()
+    assert "瘦削长脸" not in prompt  # bare face detail suppressed
+    assert "middle-aged" not in prompt
+    assert "graying hair" not in prompt
+    neg = candidate_negative_for(profile)
+    assert "bare face" in neg or "exposed face" in neg
+    assert "blue clothes" in neg or "teal" in neg
+
+
+def test_candidate_prompt_leads_with_full_body_for_elder():
+    """Elder face tokens must not bury framing — otherwise Guofeng yields bust shots."""
+    from aivp.visual.prompts import build_candidate_prompt, candidate_negative_for
+
+    su = {
+        "trigger": "su_popo_aivp",
+        "name": "苏婆婆",
+        "prompt_zh": "苏婆婆，女性，花甲前后老年面相，白发，国风动画角色定妆",
+        "gender_presentation": "feminine",
+        "age_look": "花甲前后老年面相",
+        "wardrobe": {"default": "粗布家常衣衫", "colors": ["米褐", "灰白"]},
+    }
+    prompt = build_candidate_prompt(
+        su, "solo, 1person, full body, head to toe, feet visible, facing camera, standing"
+    )
+    low = prompt.lower()
+    # Framing must appear early (before the long look string dominates).
+    head = low[:220]
+    assert "full body" in head or "head to toe" in head
+    assert "wide shot" in low or "entire figure" in low or "shoes" in low
+    assert "martial outfit" not in low
+    neg = candidate_negative_for(su)
+    assert "half body" in neg.lower() or "waist up" in neg.lower()
+    assert "bust shot" in neg.lower() or "portrait" in neg.lower()
+
+
+def test_age_lock_su_popo_and_chen_shouyi():
+    from aivp.visual.prompts import (
+        age_band,
+        build_candidate_prompt,
+        candidate_negative_for,
+        gender_lock_positive,
+    )
+
+    su = {
+        "trigger": "su_popo_aivp",
+        "name": "苏婆婆",
+        "prompt_zh": "苏婆婆，女性，花甲前后老年面相，白发，国风动画角色定妆",
+        "gender_presentation": "feminine",
+        "age_look": "花甲前后老年面相",
+        "wardrobe": {"default": "素色布衣", "colors": ["灰"]},
+    }
+    assert age_band(su["age_look"], name=su["name"]) == "elder"
+    su_pos = gender_lock_positive(
+        "female", age_look=su["age_look"], text_hints=su["prompt_zh"], name=su["name"]
+    )
+    assert "elderly" in su_pos or "old woman" in su_pos or "grandmother" in su_pos
+    assert "1girl" not in su_pos
+    su_prompt = build_candidate_prompt(su, "solo, full body")
+    assert "elderly" in su_prompt or "old woman" in su_prompt
+    assert "white gray hair" in su_prompt or "gray white hair" in su_prompt
+    su_neg = candidate_negative_for(su)
+    assert "young girl" in su_neg or "1girl" in su_neg
+
+    chen = {
+        "trigger": "chen_sy_aivp",
+        "name": "陈守义",
+        "prompt_zh": "陈守义，男性，五十开外沧桑面相，花白发，国风动画角色定妆",
+        "gender_presentation": "masculine",
+        "age_look": "五十开外沧桑面相",
+        "wardrobe": {"default": "青灰长衫", "colors": ["青灰"]},
+    }
+    assert age_band(chen["age_look"], name=chen["name"]) == "middle"
+    chen_pos = gender_lock_positive(
+        "male", age_look=chen["age_look"], text_hints=chen["prompt_zh"], name=chen["name"]
+    )
+    assert "middle-aged" in chen_pos or "fifties" in chen_pos or "weathered" in chen_pos
+    assert "young adult man" not in chen_pos
+    assert "1boy" not in chen_pos
+    chen_prompt = build_candidate_prompt(chen, "solo, full body")
+    assert "middle-aged" in chen_prompt or "weathered" in chen_prompt
+    chen_neg = candidate_negative_for(chen)
+    assert "young man" in chen_neg or "idol" in chen_neg
 
 
 def test_turnaround_front_requires_full_body():

@@ -8,6 +8,12 @@ from sqlalchemy.orm import Session
 
 from aivp.api.deps import get_db, get_settings
 from aivp.bible.export_md import export_version
+from aivp.bible.expression_rebuild import (
+    load_enrich_events,
+    rebuild_all_major_expression_dims,
+    rebuild_character_expression_dims,
+    write_characters_overlay,
+)
 from aivp.bible.meta import (
     ensure_bible_meta,
     persist_merged_bible,
@@ -32,6 +38,11 @@ class ReviewBody(BaseModel):
 class LockBody(BaseModel):
     block: str
     locked: bool = True
+
+
+class ExpressionDimsRebuildBody(BaseModel):
+    character_ids: list[str] = Field(default_factory=list)
+    max_dims: int = 8
 
 
 def _load_json(path) -> dict[str, Any]:
@@ -238,6 +249,93 @@ def lock_bible_block(
     )
     _persist(paths)
     return meta
+
+
+@router.post("/projects/{project_id}/bible/expression-dims/rebuild")
+def rebuild_expression_dims_batch(
+    project_id: str,
+    body: ExpressionDimsRebuildBody | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Cluster story emotions into expression_dims for major characters (merge mode)."""
+    _require_project(db, project_id)
+    paths = ProjectPaths(settings.data_root, project_id)
+    paths.ensure()
+    body = body or ExpressionDimsRebuildBody()
+    merged, _ = _persist(paths)
+    events = load_enrich_events(paths)
+    updated = rebuild_all_major_expression_dims(
+        merged,
+        events,
+        character_ids=body.character_ids or None,
+        max_dims=max(1, min(int(body.max_dims or 8), 16)),
+    )
+    write_characters_overlay(paths, list(updated.get("characters") or []))
+    merged2, _ = _persist(paths)
+    chars = [
+        {
+            "id": c.get("id"),
+            "name": c.get("name"),
+            "dim_count": len(c.get("expression_dims") or []),
+            "expression_dims": c.get("expression_dims") or [],
+        }
+        for c in (merged2.get("characters") or [])
+        if isinstance(c, dict)
+        and (
+            not body.character_ids
+            or c.get("id") in body.character_ids
+            or str(c.get("tier") or "") == "major"
+        )
+    ]
+    if body.character_ids:
+        want = set(body.character_ids)
+        chars = [c for c in chars if c.get("id") in want]
+    else:
+        # Only report majors when batching all.
+        id_to_tier = {
+            str(c.get("id")): str(c.get("tier") or "major")
+            for c in (merged2.get("characters") or [])
+            if isinstance(c, dict)
+        }
+        chars = [c for c in chars if id_to_tier.get(str(c.get("id"))) == "major"]
+    return {"updated": len(chars), "characters": chars, "events_used": len(events)}
+
+
+@router.post(
+    "/projects/{project_id}/bible/characters/{character_id}/expression-dims/rebuild"
+)
+def rebuild_expression_dims_one(
+    project_id: str,
+    character_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_project(db, project_id)
+    paths = ProjectPaths(settings.data_root, project_id)
+    paths.ensure()
+    merged, _ = _persist(paths)
+    events = load_enrich_events(paths)
+    chars = list(merged.get("characters") or [])
+    found = None
+    out_chars: list[dict[str, Any]] = []
+    for ch in chars:
+        if not isinstance(ch, dict):
+            continue
+        if str(ch.get("id")) == character_id:
+            found = rebuild_character_expression_dims(ch, events)
+            out_chars.append(found)
+        else:
+            out_chars.append(ch)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"character_not_found:{character_id}")
+    write_characters_overlay(paths, out_chars)
+    _persist(paths)
+    return {
+        "character_id": character_id,
+        "expression_dims": found.get("expression_dims") or [],
+        "events_used": len(events),
+    }
 
 
 @router.post("/projects/{project_id}/exports")

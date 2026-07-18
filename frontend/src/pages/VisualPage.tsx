@@ -3,17 +3,24 @@ import {
   approveVisualLora,
   checkVisualTrainset,
   clearVisualLookLock,
+  confirmVisualBootstrap,
   curateVisualCharacter,
   deleteVisualFile,
   getVisualJob,
   listVisualCharacters,
   packageVisualLora,
+  packageVisualLoraBatch,
   probeVisualLora,
   rejectVisualLora,
   setVisualLookLock,
+  skipVisualBootstrap,
+  startVisualBootstrap,
   startVisualCandidates,
   startVisualLoraTrain,
+  startVisualLoraTrainBatch,
   startVisualSheets,
+  swapVisualBootstrapLookLock,
+  rebuildExpressionDims,
   visualFileUrl,
   type VisualCharacter,
 } from "../api/client";
@@ -58,6 +65,7 @@ function sheetLabel(filename: string): string {
 export function VisualPage({ projectId }: Props) {
   const [chars, setChars] = useState<VisualCharacter[]>([]);
   const [backend, setBackend] = useState("stub");
+  const [loraTrainConfigured, setLoraTrainConfigured] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [selectedSheets, setSelectedSheets] = useState<Record<string, boolean>>({});
@@ -72,6 +80,16 @@ export function VisualPage({ projectId }: Props) {
     done: number;
     total: number;
     note?: string | null;
+    kind?: string | null;
+    characterId?: string | null;
+    step?: string | null;
+    items?: Array<{
+      character_id: string;
+      name: string;
+      status: string;
+      error?: string | null;
+      lora_file?: string | null;
+    }>;
   } | null>(null);
   const [trainCheck, setTrainCheck] = useState<{
     can_train: boolean;
@@ -91,6 +109,7 @@ export function VisualPage({ projectId }: Props) {
     const data = await listVisualCharacters(projectId);
     setChars(data.characters);
     setBackend(data.backend);
+    setLoraTrainConfigured(Boolean(data.lora_train_configured));
     if (!activeId && data.characters[0]) {
       setActiveId(data.characters[0].character_id);
     }
@@ -145,33 +164,67 @@ export function VisualPage({ projectId }: Props) {
 
   const pollJob = async (jobId: string) => {
     let lastDone = -1;
-    for (let i = 0; i < 1200; i++) {
+    let lastStatus = "";
+    let lastNote = "";
+    let kind = "";
+    // Image jobs ~10min; LoRA train can take hours.
+    for (let i = 0; i < 20000; i++) {
       const j = await getVisualJob(projectId, jobId);
+      kind = String(j.kind || kind || "");
+      const isTrain =
+        kind === "lora_train" || kind === "lora_train_batch";
+      const isBootstrap = kind === "visual_bootstrap";
       const done = Number(j.progress_done || 0);
       const total = Number(j.progress_total || 0);
       const note = typeof j.progress_note === "string" ? j.progress_note : null;
-      if (total > 0) {
+      const status = String(j.status || "");
+      const defaultNote = isTrain
+        ? status === "running"
+          ? kind === "lora_train_batch"
+            ? `批量微调进行中 ${done}/${Math.max(total, 1)}…`
+            : "LoRA 微调进行中…（通常需数十分钟，请勿关闭页面）"
+          : status === "succeeded"
+            ? kind === "lora_train_batch"
+              ? "批量微调完成"
+              : "微调完成"
+            : `微调 ${done}/${Math.max(total, 1)}`
+        : isBootstrap
+          ? note ||
+            (total > 0
+              ? `初始化训练集 ${done}/${total}${j.bootstrap_step ? ` · ${j.bootstrap_step}` : ""}`
+              : "初始化视觉训练集…")
+          : total > 0
+            ? done < total
+              ? `正在生成第 ${done + 1}/${total} 张（已完成 ${done}）`
+              : `已完成 ${done}/${total}`
+            : null;
+      if (total > 0 || note || isTrain || isBootstrap) {
         setJobProgress({
           done,
-          total,
-          note:
-            note ||
-            (done < total
-              ? `正在生成第 ${done + 1}/${total} 张（已完成 ${done}）`
-              : `已完成 ${done}/${total}`),
+          total: Math.max(total, 1),
+          note: note || defaultNote,
+          kind,
+          characterId: j.current_character_id || null,
+          step: j.bootstrap_step || null,
+          items: Array.isArray(j.items) ? j.items : undefined,
         });
       }
-      // Refresh gallery as soon as each new image is written on disk.
-      if (done !== lastDone && (j.status === "running" || j.status === "succeeded")) {
+      // Refresh gallery whenever progress advances or status/note changes.
+      if (
+        (done !== lastDone || status !== lastStatus || (note || "") !== lastNote) &&
+        (status === "running" || status === "succeeded" || status === "failed")
+      ) {
         lastDone = done;
+        lastStatus = status;
+        lastNote = note || "";
         try {
           await refresh();
         } catch {
           /* keep polling even if refresh fails once */
         }
       }
-      if (j.status === "succeeded" || j.status === "failed") return j;
-      await new Promise((r) => setTimeout(r, 500));
+      if (status === "succeeded" || status === "failed") return j;
+      await new Promise((r) => setTimeout(r, isTrain ? 1500 : 500));
     }
     throw new Error("visual job timeout");
   };
@@ -180,16 +233,80 @@ export function VisualPage({ projectId }: Props) {
     setBusy(true);
     setError(null);
     setJobProgress(null);
+    let keepProgress = false;
     try {
       const job = await start();
       const done = await pollJob(job.id);
+      const kind = String(done.kind || "");
+      // Keep batch train panel so users can compare per-character results.
+      // Keep bootstrap progress briefly so confirm UI can follow refresh.
+      keepProgress =
+        kind === "lora_train_batch" || kind === "visual_bootstrap";
       if (done.status === "failed") throw new Error(done.error || "visual job failed");
+      if (done.error && String(done.error).startsWith("partial_failed:")) {
+        setError(`批量微调部分失败：${done.error}`);
+      }
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
-      setJobProgress(null);
+      if (!keepProgress) setJobProgress(null);
+    }
+  };
+
+  const onBootstrap = () =>
+    void runVisualJob(() =>
+      startVisualBootstrap(projectId, {
+        character_ids: activeId ? [activeId] : undefined,
+      }),
+    );
+
+  const onBootstrapAll = () =>
+    void runVisualJob(() => startVisualBootstrap(projectId, {}));
+
+  const onConfirmBootstrap = async () => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await confirmVisualBootstrap(projectId, active.character_id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSkipBootstrap = async () => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await skipVisualBootstrap(projectId, active.character_id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSwapBootstrapLock = async (filename: string) => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await swapVisualBootstrapLookLock(projectId, active.character_id, {
+        filename,
+        folder: "look_lock_archive",
+      });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -230,6 +347,39 @@ export function VisualPage({ projectId }: Props) {
     void runVisualJob(() =>
       startVisualSheets(projectId, active.character_id, { slot_keys: [slotKey] }),
     );
+  };
+
+  const expressionButtons = (() => {
+    const dims = (active?.expression_dims || []).filter(
+      (d) => d.status !== "rejected" && d.status !== "stale",
+    );
+    if (dims.length) {
+      return dims.map((d) => [d.id, d.label || d.id] as [string, string]);
+    }
+    return [
+      ["expr_calm", "平静"],
+      ["expr_smile", "微笑"],
+      ["expr_happy", "开心"],
+      ["expr_confused", "疑惑"],
+      ["expr_angry", "愤怒"],
+      ["expr_sad", "悲伤"],
+      ["expr_surprised", "惊讶"],
+      ["expr_shy", "害羞"],
+    ] as [string, string][];
+  })();
+
+  const onRebuildExpressionDims = async () => {
+    if (!active) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await rebuildExpressionDims(projectId, active.character_id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onExpressionBatch = () => {
@@ -305,9 +455,47 @@ export function VisualPage({ projectId }: Props) {
     }
   };
 
+  const onPackageBatch = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await packageVisualLoraBatch(projectId);
+      const ok = (out.results || []).filter((r) => r.packaged !== false).length;
+      const fail = (out.results || []).length - ok;
+      if (fail > 0) {
+        setError(`批量导出完成：成功 ${ok}，跳过/失败 ${fail}（需先确认可训练训练集）`);
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onTrain = async () => {
     if (!active) return;
+    if (!loraTrainConfigured) {
+      setError(
+        "尚未配置 AIVP_LORA_TRAIN_CMD，无法真正开始微调。请在 backend/.env 设置 kohya/sd-scripts 训练命令后再试。",
+      );
+      return;
+    }
     await runVisualJob(() => startVisualLoraTrain(projectId, active.character_id));
+  };
+
+  const onTrainBatch = async () => {
+    if (!loraTrainConfigured) {
+      setError(
+        "尚未配置 AIVP_LORA_TRAIN_CMD，无法批量微调。请先配置训练命令。",
+      );
+      return;
+    }
+    await runVisualJob(() =>
+      startVisualLoraTrainBatch(projectId, {
+        auto_package: true,
+      }),
+    );
   };
 
   const onProbe = async () => {
@@ -490,29 +678,79 @@ export function VisualPage({ projectId }: Props) {
         <strong> {backend}</strong>
         {backend === "stub" ? "（占位出图，接好 Comfy 后改 AIVP_IMAGE_BACKEND=comfy）" : ""}。
       </p>
+      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={onBootstrap}
+        >
+          初始化视觉训练集
+          {active ? `（${active.name}）` : ""}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={busy}
+          onClick={onBootstrapAll}
+        >
+          全部 major 初始化
+        </button>
+        <span className="note" style={{ margin: 0 }}>
+          自动定妆 + 多姿态训练集，完成后人工确认（不会自动开训 LoRA）
+        </span>
+      </div>
 
-      <div className="bible-layout">
-        <nav aria-label="visual-characters">
-          <ul className="bible-nav">
-            {chars.map((c) => (
-              <li key={c.character_id}>
-                <button
-                  type="button"
-                  aria-current={c.character_id === activeId ? "page" : undefined}
-                  onClick={() => setActiveId(c.character_id)}
-                >
-                  {c.name}
-                  <span className="note">
-                    {" "}
-                    · 候选{c.candidate_count}/表{c.sheet_count ?? 0}/已选{c.curated_count}
-                    {c.lora_ready ? " · LoRA✓" : ""}
-                    {c.train_status && c.train_status !== "not_started"
-                      ? ` · ${c.train_status}`
-                      : ""}
-                  </span>
-                </button>
-              </li>
-            ))}
+      <div className="bible-layout visual-layout">
+        <nav className="visual-char-nav" aria-label="visual-characters">
+          <ul>
+            {chars.map((c) => {
+              const isActive = c.character_id === activeId;
+              const trainLabel =
+                c.train_status && c.train_status !== "not_started"
+                  ? c.train_status
+                  : null;
+              return (
+                <li key={c.character_id}>
+                  <button
+                    type="button"
+                    className="visual-char-item"
+                    aria-current={isActive ? "page" : undefined}
+                    onClick={() => setActiveId(c.character_id)}
+                  >
+                    <span className="visual-char-name">{c.name}</span>
+                    <span className="visual-char-stats">
+                      候选 {c.candidate_count} · 表 {c.sheet_count ?? 0} · 已选{" "}
+                      {c.curated_count}
+                    </span>
+                    <span className="visual-char-flags">
+                      {c.bootstrap_status === "awaiting_confirm" ? (
+                        <span className="visual-char-flag">待确认</span>
+                      ) : null}
+                      {c.lora_ready ? (
+                        <span className="visual-char-flag is-ok">LoRA</span>
+                      ) : null}
+                      {trainLabel ? (
+                        <span
+                          className={
+                            trainLabel === "package_ready" ||
+                            trainLabel === "trained" ||
+                            trainLabel === "curated_ready"
+                              ? "visual-char-flag is-ok"
+                              : trainLabel === "failed" ||
+                                  trainLabel === "train_failed"
+                                ? "visual-char-flag is-bad"
+                                : "visual-char-flag"
+                          }
+                        >
+                          {trainLabel}
+                        </span>
+                      ) : null}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </nav>
 
@@ -527,14 +765,134 @@ export function VisualPage({ projectId }: Props) {
                 trigger：<code>{active.trigger}</code> · 状态 {active.status || "—"} ·
                 train {active.train_status || "not_started"} · probe{" "}
                 {active.probe_status || "not_started"}
+                {active.bootstrap_status && active.bootstrap_status !== "not_started"
+                  ? ` · bootstrap ${active.bootstrap_status}`
+                  : ""}
                 {active.lora_ready ? " · lora_ready" : ""}
               </p>
               {jobProgress && (
-                <p className="note" role="status">
-                  {jobProgress.note ||
-                    `正在出图 ${jobProgress.done}/${jobProgress.total}`}
-                  （每完成一张会立刻出现在下方）
-                </p>
+                <div className="bible-card" aria-label="job-progress">
+                  <p className="note" role="status" style={{ marginBottom: 8 }}>
+                    {jobProgress.kind === "lora_train" ||
+                    jobProgress.kind === "lora_train_batch"
+                      ? jobProgress.note || "LoRA 微调进行中…"
+                      : jobProgress.kind === "visual_bootstrap"
+                        ? jobProgress.note ||
+                          `初始化训练集 ${jobProgress.done}/${jobProgress.total}`
+                        : jobProgress.note ||
+                          `正在出图 ${jobProgress.done}/${jobProgress.total}`}
+                    {jobProgress.kind === "lora_train_batch"
+                      ? ` · 总进度 ${jobProgress.done}/${jobProgress.total}`
+                      : jobProgress.kind === "lora_train"
+                        ? "（状态栏会刷新运行秒数）"
+                        : jobProgress.kind === "visual_bootstrap"
+                          ? jobProgress.step
+                            ? ` · 步骤 ${jobProgress.step}`
+                            : ""
+                          : "（每完成一张会立刻出现在下方）"}
+                  </p>
+                  {jobProgress.kind === "lora_train_batch" &&
+                    !!jobProgress.items?.length && (
+                      <ul className="visual-batch-train-list">
+                        {jobProgress.items.map((it) => (
+                          <li key={it.character_id}>
+                            <strong>{it.name}</strong>
+                            <span className={`visual-char-flag ${
+                              it.status === "succeeded"
+                                ? "is-ok"
+                                : it.status === "failed"
+                                  ? "is-bad"
+                                  : it.status === "running"
+                                    ? "is-ok"
+                                    : ""
+                            }`}>
+                              {it.status}
+                            </span>
+                            {it.lora_file ? (
+                              <span className="visual-char-stats">{it.lora_file}</span>
+                            ) : null}
+                            {it.error ? (
+                              <span className="visual-char-stats">{it.error}</span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                </div>
+              )}
+              {(active.bootstrap_status === "awaiting_confirm" ||
+                active.bootstrap_status === "look_lock_needs_review" ||
+                active.bootstrap_status === "description_needs_review") && (
+                <div className="bible-card" aria-label="bootstrap-review">
+                  <h4 style={{ marginTop: 0 }}>训练集待确认</h4>
+                  <p className="note">
+                    状态：{active.bootstrap_status}
+                    {active.look_lock_ready ? " · 已有定妆" : " · 尚未定妆"}
+                  </p>
+                  {!!(active.bootstrap_warnings || []).length && (
+                    <ul className="note">
+                      {(active.bootstrap_warnings || []).slice(0, 8).map((w) => (
+                        <li key={w}>{w}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {!!(active.look_lock_archive || []).length && (
+                    <>
+                      <p className="note">备选定妆（点选替换）：</p>
+                      <div className="bible-cards visual-thumbs" aria-label="lock-archive">
+                        {(active.look_lock_archive || []).map((name) => (
+                          <div key={name} className="visual-thumb">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void onSwapBootstrapLock(name)}
+                              style={{
+                                display: "block",
+                                width: "100%",
+                                padding: 0,
+                                border: "1px solid var(--border)",
+                                background: "transparent",
+                                cursor: "pointer",
+                                borderRadius: 8,
+                              }}
+                              aria-label={`换定妆 ${name}`}
+                            >
+                              <img
+                                src={visualFileUrl(
+                                  projectId,
+                                  active.character_id,
+                                  "look_lock_archive",
+                                  name,
+                                )}
+                                alt={name}
+                                className="visual-thumb-img"
+                              />
+                            </button>
+                            <span className="visual-char-stats">{name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy || active.bootstrap_status === "description_needs_review"}
+                      onClick={() => void onConfirmBootstrap()}
+                    >
+                      确认训练集
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={busy}
+                      onClick={() => void onSkipBootstrap()}
+                    >
+                      跳过此角色
+                    </button>
+                  </div>
+                </div>
               )}
               <p className="bible-plain">{active.prompt_zh || "（无 prompt_zh）"}</p>
 
@@ -573,19 +931,60 @@ export function VisualPage({ projectId }: Props) {
                 </button>
                 <button
                   type="button"
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={() => void onPackageBatch()}
+                  title="为所有可训练角色导出训练包"
+                >
+                  批量导出训练包
+                </button>
+                <button
+                  type="button"
                   className="btn btn-primary"
                   disabled={
                     busy ||
+                    !loraTrainConfigured ||
                     !(
                       active.train_status === "package_ready" ||
                       active.status === "package_ready"
                     )
                   }
                   onClick={() => void onTrain()}
+                  title={
+                    loraTrainConfigured
+                      ? "启动当前角色外部 LoRA 训练"
+                      : "请先配置 AIVP_LORA_TRAIN_CMD"
+                  }
                 >
-                  开始微调
+                  开始微调（当前）
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy || !loraTrainConfigured}
+                  onClick={() => void onTrainBatch()}
+                  title={
+                    loraTrainConfigured
+                      ? "串行微调全部 package_ready / 可导出角色，并显示逐个进度"
+                      : "请先配置 AIVP_LORA_TRAIN_CMD"
+                  }
+                >
+                  统一微调全部就绪
                 </button>
               </div>
+              {!loraTrainConfigured && (
+                <p className="note">
+                  微调未就绪：当前未配置 <code>AIVP_LORA_TRAIN_CMD</code>
+                  ，点击也不会进入长时间训练。配置 kohya/sd-scripts
+                  命令后刷新页面即可。
+                </p>
+              )}
+              {active.train_status === "training" && (
+                <p className="note" role="status">
+                  角色状态为 training：后台微调可能仍在进行，请查看状态栏进度或
+                  lora 目录下的 train_stdout.log。
+                </p>
+              )}
               {trainCheck && (
                 <div className="bible-card" aria-label="trainset-check">
                   <p className="note">
@@ -774,30 +1173,43 @@ export function VisualPage({ projectId }: Props) {
                 </button>
               </div>
 
-              <h4 style={{ marginBottom: 0 }}>表情（LoRA）</h4>
+              <h4 style={{ marginBottom: 0 }}>表情（剧情维度 / LoRA）</h4>
+              {active.expression_dims && active.expression_dims.length > 0 ? (
+                <p className="note" style={{ marginTop: 0 }}>
+                  来自 Story Bible 的 {expressionButtons.length} 个表情维度
+                  {active.default_expression
+                    ? ` · 定妆默认：${active.default_expression}`
+                    : ""}
+                </p>
+              ) : (
+                <p className="note" style={{ marginTop: 0 }}>
+                  尚未从剧情聚类表情维度，当前显示通用 8 槽。可点「从剧情重建表情维度」。
+                </p>
+              )}
               <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-                {(
-                  [
-                    ["expr_calm", "平静"],
-                    ["expr_smile", "微笑"],
-                    ["expr_happy", "开心"],
-                    ["expr_confused", "疑惑"],
-                    ["expr_angry", "愤怒"],
-                    ["expr_sad", "悲伤"],
-                    ["expr_surprised", "惊讶"],
-                    ["expr_shy", "害羞"],
-                  ] as const
-                ).map(([key, label]) => (
+                {expressionButtons.map(([key, label]) => (
                   <button
                     key={key}
                     type="button"
                     className="btn btn-primary"
                     disabled={busy}
                     onClick={() => onExpressionOnce(key)}
+                    title={
+                      (active.expression_dims || []).find((d) => d.id === key)
+                        ?.evidence?.[0]?.text || key
+                    }
                   >
                     单次·{label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={() => void onRebuildExpressionDims()}
+                >
+                  从剧情重建表情维度
+                </button>
                 <button
                   type="button"
                   className="btn btn-secondary"

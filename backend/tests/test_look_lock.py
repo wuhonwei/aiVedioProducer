@@ -52,11 +52,20 @@ def test_set_look_lock_and_candidates_use_ref(tmp_path: Path):
 
     again = generate_candidates_for_character(vpaths, character, backend, count=2)
     assert again["look_lock"] is True
-    assert 0.60 <= float(again["denoise"]) <= 0.78
+    # Full-body ref + moderate denoise: outfit lock first, mild stance change.
+    assert 0.50 <= float(again["denoise"]) <= 0.72
     meta = (vpaths.candidates_dir("ent_0001") / again["files"][0]).with_suffix(".json")
     payload = __import__("json").loads(meta.read_text(encoding="utf-8"))
     assert payload.get("ref_image")
-    assert float(payload.get("denoise") or 0) >= 0.60
+    ref_name = str(payload.get("ref_image") or "").replace("\\", "/").lower()
+    assert ref_name.endswith("/ref.png") or payload.get("look_lock_ref_kind") == "full"
+    assert float(payload.get("denoise") or 0) <= 0.72
+    prompt = (vpaths.candidates_dir("ent_0001") / again["files"][0]).with_suffix(".txt").read_text(
+        encoding="utf-8"
+    )
+    assert "青灰长衫" in prompt or "outfit" in prompt.lower() or "wardrobe" in prompt.lower()
+    assert "full body" in prompt.lower() or "head to toe" in prompt.lower()
+    assert "same" in prompt.lower() and "outfit" in prompt.lower()
 
     from aivp.visual.sheets import generate_character_sheets
 
@@ -81,9 +90,10 @@ def test_set_look_lock_and_candidates_use_ref(tmp_path: Path):
     side = next(f for f in sheets["files"] if f["key"] == "turnaround_side")
     side_meta = (vpaths.sheets_dir("ent_0001") / side["file"]).with_suffix(".meta.json")
     side_payload = __import__("json").loads(side_meta.read_text(encoding="utf-8"))
-    assert side_payload.get("look_lock") is True
-    assert float(side_payload.get("denoise") or 0) >= 0.88
+    # Side view is txt2img (no front look-lock image) so pose can leave front.
+    assert side_payload.get("look_lock") is False
     assert float(side_payload.get("cfg") or 0) >= 9.0
+    assert "side" in (side_payload.get("prompt") or "").lower()
 
 
 def test_face_crop_from_look_lock(tmp_path: Path):
@@ -109,6 +119,43 @@ def test_face_crop_from_look_lock(tmp_path: Path):
     assert face.exists()
     im = Image.open(face)
     assert im.size == (768, 768)
+
+
+def test_face_crop_portrait_look_lock_tight_headshot(tmp_path: Path):
+    """Upper-body portrait refs must become a tight square headshot.
+
+    Padding 3:4 portraits to square leaves gray side bars and a tiny face;
+    expression img2img then copies that candidate layout.
+    """
+    from PIL import Image
+
+    from aivp.visual.look_lock import _write_face_crop
+
+    src = tmp_path / "portrait.png"
+    # 3:4 portrait: green "face" band in the upper half, red torso below.
+    im = Image.new("RGB", (768, 1024), color=(20, 20, 20))
+    for y in range(40, 420):
+        for x in range(120, 648):
+            im.putpixel((x, y), (40, 200, 80))
+    for y in range(520, 1024):
+        for x in range(768):
+            im.putpixel((x, y), (200, 40, 40))
+    im.save(src)
+    dest = tmp_path / "face_ref.png"
+    _write_face_crop(src, dest)
+    out = Image.open(dest)
+    assert out.size == (768, 768)
+    # No letterbox / pillarbox: left edge should not be uniform pad gray.
+    left_col = [out.getpixel((8, y)) for y in range(0, 768, 32)]
+    assert not all(all(abs(c - 248) < 12 for c in px) for px in left_col), left_col[:3]
+    # Face green should dominate center; red torso should be mostly gone.
+    center = out.getpixel((384, 300))
+    assert center[1] > 80, center
+    bottom = out.getpixel((384, 720))
+    assert bottom[0] < 120, bottom
+
+
+def test_look_lock_api_set_and_clear(tmp_path: Path):
     app = create_app(
         Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path/'ll.db'}", image_backend="stub")
     )

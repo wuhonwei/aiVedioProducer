@@ -73,7 +73,10 @@ async function readErrorMessage(r: Response): Promise<string> {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${BASE}${path}`, init);
+  const r = await fetch(`${BASE}${path}`, {
+    cache: "no-store",
+    ...init,
+  });
   if (!r.ok) throw new Error(await readErrorMessage(r));
   return r.json() as Promise<T>;
 }
@@ -292,6 +295,16 @@ export const patchAssetPlanEntry = (
     },
   );
 
+export type ExpressionDim = {
+  id: string;
+  label: string;
+  emotion?: string;
+  framing?: string;
+  status?: string;
+  priority?: number;
+  evidence?: Array<{ text?: string; source?: string; ref?: string }>;
+};
+
 export type VisualCharacter = {
   character_id: string;
   name: string;
@@ -303,6 +316,8 @@ export type VisualCharacter = {
   lora_ready: boolean;
   train_status?: string;
   probe_status?: string;
+  bootstrap_status?: string;
+  bootstrap_warnings?: string[];
   look_lock?: {
     folder?: string;
     file?: string;
@@ -311,6 +326,7 @@ export type VisualCharacter = {
     set_at?: string;
   } | null;
   look_lock_ready?: boolean;
+  look_lock_archive?: string[];
   candidates: string[];
   curated: string[];
   sheets?: string[];
@@ -318,12 +334,16 @@ export type VisualCharacter = {
   status?: string;
   prompt_zh?: string;
   lora_file?: string | null;
+  expression_dims?: ExpressionDim[];
+  default_expression?: string;
 };
 
 export const listVisualCharacters = (projectId: string) =>
-  req<{ characters: VisualCharacter[]; backend: string }>(
-    `/api/projects/${projectId}/visual/characters`,
-  );
+  req<{
+    characters: VisualCharacter[];
+    backend: string;
+    lora_train_configured?: boolean;
+  }>(`/api/projects/${projectId}/visual/characters`);
 
 export const startVisualCandidates = (
   projectId: string,
@@ -334,6 +354,49 @@ export const startVisualCandidates = (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
   });
+
+export const startVisualBootstrap = (
+  projectId: string,
+  body?: { character_ids?: string[] },
+) =>
+  req<{ id: string; status: string; kind?: string }>(
+    `/api/projects/${projectId}/visual/bootstrap`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    },
+  );
+
+export const confirmVisualBootstrap = (projectId: string, characterId: string) =>
+  req<{ character_id: string; bootstrap_status: string; train_status: string }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/bootstrap/confirm`,
+    { method: "POST" },
+  );
+
+export const skipVisualBootstrap = (projectId: string, characterId: string) =>
+  req<{ character_id: string; bootstrap_status: string }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/bootstrap/skip`,
+    { method: "POST" },
+  );
+
+export const swapVisualBootstrapLookLock = (
+  projectId: string,
+  characterId: string,
+  body: { filename: string; folder?: string; denoise?: number },
+) =>
+  req<{
+    character_id: string;
+    bootstrap_status: string;
+    swapped_from: { folder: string; file: string };
+  }>(
+    `/api/projects/${projectId}/visual/characters/${characterId}/bootstrap/swap-look-lock`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 
 export const setVisualLookLock = (
   projectId: string,
@@ -370,12 +433,57 @@ export const startVisualSheets = (
     }),
   });
 
+export const rebuildExpressionDims = (
+  projectId: string,
+  characterId?: string,
+) =>
+  characterId
+    ? req<{
+        character_id: string;
+        expression_dims: ExpressionDim[];
+        events_used: number;
+      }>(
+        `/api/projects/${projectId}/bible/characters/${characterId}/expression-dims/rebuild`,
+        { method: "POST" },
+      )
+    : req<{
+        updated: number;
+        characters: Array<{
+          id: string;
+          name: string;
+          dim_count: number;
+          expression_dims: ExpressionDim[];
+        }>;
+        events_used: number;
+      }>(`/api/projects/${projectId}/bible/expression-dims/rebuild`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
 export const getVisualJob = (projectId: string, jobId: string) =>
   req<{
     id: string;
     status: string;
+    kind?: string;
     progress_done?: number;
     progress_total?: number;
+    progress_note?: string | null;
+    current_character_id?: string | null;
+    bootstrap_step?: string | null;
+    items?: Array<{
+      character_id: string;
+      name: string;
+      status: string;
+      error?: string | null;
+      lora_file?: string | null;
+    }>;
+    skipped?: Array<{
+      character_id: string;
+      name: string;
+      status: string;
+      error?: string | null;
+    }>;
     error?: string | null;
     result?: unknown;
   }>(`/api/projects/${projectId}/visual/jobs/${jobId}`);
@@ -420,11 +528,52 @@ export const packageVisualLora = (projectId: string, characterId: string) =>
     { method: "POST" },
   );
 
+export const packageVisualLoraBatch = (
+  projectId: string,
+  characterIds?: string[],
+) =>
+  req<{ results: Array<Record<string, unknown>> }>(
+    `/api/projects/${projectId}/visual/lora/package`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ character_ids: characterIds }),
+    },
+  );
+
 export const startVisualLoraTrain = (projectId: string, characterId: string) =>
   req<{ id: string; status: string; kind?: string }>(
     `/api/projects/${projectId}/visual/characters/${characterId}/lora/train`,
     { method: "POST" },
   );
+
+export type BatchTrainItem = {
+  character_id: string;
+  name: string;
+  status: string;
+  error?: string | null;
+  lora_file?: string | null;
+};
+
+export const startVisualLoraTrainBatch = (
+  projectId: string,
+  body?: { character_ids?: string[]; auto_package?: boolean },
+) =>
+  req<{
+    id: string;
+    status: string;
+    kind?: string;
+    progress_total?: number;
+    items?: BatchTrainItem[];
+    skipped?: BatchTrainItem[];
+  }>(`/api/projects/${projectId}/visual/lora/train/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      character_ids: body?.character_ids,
+      auto_package: body?.auto_package ?? true,
+    }),
+  });
 
 /** @deprecated Prefer packageVisualLora + startVisualLoraTrain */
 export const trainVisualLora = (projectId: string, characterIds?: string[]) =>
