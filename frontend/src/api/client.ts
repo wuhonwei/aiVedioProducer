@@ -714,7 +714,15 @@ export const rejectVisualLora = (
 
 export const visualT2I = (
   projectId: string,
-  body: { character_id: string; prompt: string; shot_id?: string; is_probe?: boolean },
+  body: {
+    character_id?: string;
+    character_ids?: string[];
+    location_id?: string;
+    prompt: string;
+    shot_id?: string;
+    is_probe?: boolean;
+    use_location_lora?: boolean;
+  },
 ) =>
   req<Record<string, unknown>>(`/api/projects/${projectId}/visual/t2i`, {
     method: "POST",

@@ -3,9 +3,14 @@ import {
   exportShotsYaml,
   getAssetPlan,
   getShots,
+  listVisualLocations,
   patchShot,
   regenerateAssetPlan,
   reviewShot,
+  visualFileUrl,
+  visualLocationFileUrl,
+  visualT2I,
+  type VisualLocation,
 } from "../api/client";
 
 type Shot = {
@@ -76,6 +81,10 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [shots, setShots] = useState<Shot[]>([]);
+  const [locations, setLocations] = useState<VisualLocation[]>([]);
+  const [useLocationLora, setUseLocationLora] = useState(false);
+  const [genBusy, setGenBusy] = useState(false);
+  const [genPreviewUrl, setGenPreviewUrl] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -154,6 +163,12 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, filterStatus, filterEvent, filterChapter]);
 
+  useEffect(() => {
+    listVisualLocations(projectId)
+      .then((data) => setLocations(data.locations || []))
+      .catch(() => setLocations([]));
+  }, [projectId]);
+
   const groups = useMemo(() => {
     const map = new Map<string, Shot[]>();
     for (const shot of shots) {
@@ -188,6 +203,8 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
       props: (selected.props || selected.assets_required?.props || []).join("、"),
       audio_notes: selected.audio_notes || "",
     });
+    setUseLocationLora(false);
+    setGenPreviewUrl(null);
   }, [selectedId, selected]);
 
   const onReview = async (shotId: string, status: string) => {
@@ -243,6 +260,35 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
       await reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const onGenerateShot = async () => {
+    if (!selectedId || !selected) return;
+    setGenBusy(true);
+    setError(null);
+    try {
+      const cast = (selected.cast || selected.characters || []).filter(Boolean);
+      const out = await visualT2I(projectId, {
+        shot_id: selected.shot_id,
+        location_id: selected.location_id || undefined,
+        character_ids: cast,
+        character_id: cast[0],
+        prompt: draft.visual_prompt || selected.visual_prompt || "",
+        use_location_lora: useLocationLora,
+      });
+      const file = String(out.file || "");
+      const charIds = (out.character_ids as string[] | undefined) || cast;
+      const locId = (out.location_id as string | undefined) || selected.location_id;
+      if (charIds[0]) {
+        setGenPreviewUrl(visualFileUrl(projectId, charIds[0], "generations", file));
+      } else if (locId) {
+        setGenPreviewUrl(visualLocationFileUrl(projectId, locId, "generations", file));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenBusy(false);
     }
   };
 
@@ -444,6 +490,39 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
               onChange={(e) => setDraft((d) => ({ ...d, audio_notes: e.target.value }))}
             />
           </label>
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              aria-label="use-location-lora"
+              checked={useLocationLora}
+              disabled={
+                !selected.location_id ||
+                !locations.find((l) => l.location_id === selected.location_id)?.lora_ready
+              }
+              onChange={(e) => setUseLocationLora(e.target.checked)}
+            />
+            使用地点 LoRA
+          </label>
+          {selected.location_id &&
+            !locations.find((l) => l.location_id === selected.location_id)?.lora_ready && (
+              <p className="note">该地点尚未 lora_ready，无法启用地点 LoRA</p>
+            )}
+          <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={
+                genBusy ||
+                (!(selected.cast || selected.characters || []).length && !selected.location_id)
+              }
+              onClick={() => void onGenerateShot()}
+            >
+              {genBusy ? "生成中…" : "生成镜头图"}
+            </button>
+            {genPreviewUrl && (
+              <img src={genPreviewUrl} alt="shot preview" style={{ maxWidth: 320, marginTop: 8 }} />
+            )}
+          </div>
           <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8 }}>
             <button
               type="button"
