@@ -45,6 +45,11 @@ type Shot = {
     props?: string[];
     style?: string[];
   };
+  asset_refs?: {
+    characters?: string[];
+    locations?: string[];
+    props?: string[];
+  };
   review?: { status?: string; notes?: string[] };
 };
 
@@ -185,6 +190,45 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   const selected = shots.find((s) => s.shot_id === selectedId) || null;
   selectedIdRef.current = selectedId;
 
+  const characterNameToId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of plan?.characters || []) {
+      const id = String(item.id ?? "").trim();
+      const name = String(item.name ?? "").trim();
+      if (id && name) map.set(name, id);
+    }
+    return map;
+  }, [plan]);
+
+  const locationNameToId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of plan?.locations || []) {
+      const id = String(item.id ?? "").trim();
+      const name = String(item.name ?? "").trim();
+      if (id && name) map.set(name, id);
+    }
+    return map;
+  }, [plan]);
+
+  const resolveCharacterIds = (shot: Shot): string[] => {
+    const refIds = (shot.asset_refs?.characters || []).filter(Boolean);
+    if (refIds.length) return refIds;
+    const names = (shot.cast || shot.characters || []).filter(Boolean);
+    return names.map((name) => characterNameToId.get(name) || name);
+  };
+
+  const resolveLocationId = (shot: Shot, draftLocation?: string): string | undefined => {
+    if (shot.location_id) return shot.location_id;
+    const refLoc = (shot.asset_refs?.locations || []).find(Boolean);
+    if (refLoc) return refLoc;
+    const name = draftLocation || shot.location || shot.location_name;
+    if (name) {
+      const mapped = locationNameToId.get(name);
+      if (mapped) return mapped;
+    }
+    return undefined;
+  };
+
   useEffect(() => {
     if (!selected) return;
     const cam = typeof selected.camera === "object" && selected.camera ? selected.camera : {};
@@ -274,20 +318,21 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
     setGenPreviewUrl(null);
     setError(null);
     try {
-      const cast = (selected.cast || selected.characters || []).filter(Boolean);
+      const characterIds = resolveCharacterIds(selected);
+      const locationId = resolveLocationId(selected, draft.location);
       const out = await visualT2I(projectId, {
         shot_id: selected.shot_id,
-        location_id: selected.location_id || undefined,
-        character_ids: cast,
-        character_id: cast[0],
+        location_id: locationId || undefined,
+        character_ids: characterIds,
+        character_id: characterIds[0],
         prompt: draft.visual_prompt || selected.visual_prompt || "",
         use_location_lora: useLocationLora,
       });
       if (genTokenRef.current !== token) return;
       if (selectedIdRef.current !== shotIdAtStart) return;
       const file = String(out.file || "");
-      const charIds = (out.character_ids as string[] | undefined) || cast;
-      const locId = (out.location_id as string | undefined) || selected.location_id;
+      const charIds = (out.character_ids as string[] | undefined) || characterIds;
+      const locId = (out.location_id as string | undefined) || locationId;
       if (charIds[0]) {
         setGenPreviewUrl(visualFileUrl(projectId, charIds[0], "generations", file));
       } else if (locId) {
@@ -315,6 +360,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   };
 
   const locked = Boolean(selected?.locked || reviewOf(selected || {}) === "locked");
+  const resolvedLocationId = selected ? resolveLocationId(selected, draft.location) : undefined;
 
   return (
     <section className="panel">
@@ -508,15 +554,15 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
               aria-label="use-location-lora"
               checked={useLocationLora}
               disabled={
-                !selected.location_id ||
-                !locations.find((l) => l.location_id === selected.location_id)?.lora_ready
+                !resolvedLocationId ||
+                !locations.find((l) => l.location_id === resolvedLocationId)?.lora_ready
               }
               onChange={(e) => setUseLocationLora(e.target.checked)}
             />
             使用地点 LoRA
           </label>
-          {selected.location_id &&
-            !locations.find((l) => l.location_id === selected.location_id)?.lora_ready && (
+          {resolvedLocationId &&
+            !locations.find((l) => l.location_id === resolvedLocationId)?.lora_ready && (
               <p className="note">该地点尚未 lora_ready，无法启用地点 LoRA</p>
             )}
           <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8, alignItems: "center" }}>
@@ -525,7 +571,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
               className="btn btn-primary"
               disabled={
                 genBusy ||
-                (!(selected.cast || selected.characters || []).length && !selected.location_id)
+                (!resolveCharacterIds(selected).length && !resolvedLocationId)
               }
               onClick={() => void onGenerateShot()}
             >
