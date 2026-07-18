@@ -151,6 +151,85 @@ def test_assert_distinct_raises_on_collision():
     assert raised
 
 
+def test_assert_distinct_raises_on_shared_wardrobe():
+    """Same wardrobe on two majors must fail even when faces differ."""
+    a = {
+        "name": "甲",
+        "tier": "major",
+        "age_look": "青年",
+        "gender_presentation": "masculine",
+        "appearance": _full_app(face_shape="圆脸", eyes="杏眼"),
+        "wardrobe": {"default": "深蓝行囊式披风短衫", "alternate": [], "colors": []},
+        "prompt_zh": "",
+    }
+    a["prompt_zh"] = compose_character_prompt_zh(
+        name="甲",
+        gender_presentation="masculine",
+        age_look="青年",
+        appearance=a["appearance"],
+        wardrobe_default="深蓝行囊式披风短衫",
+    )
+    b = {
+        "name": "乙",
+        "tier": "major",
+        "age_look": "中年",
+        "gender_presentation": "masculine",
+        "appearance": _full_app(face_shape="长脸", eyes="凤眼", hair="白发"),
+        "wardrobe": {"default": "深蓝行囊式披风短衫", "alternate": [], "colors": []},
+        "prompt_zh": "",
+    }
+    b["prompt_zh"] = compose_character_prompt_zh(
+        name="乙",
+        gender_presentation="masculine",
+        age_look="中年",
+        appearance=b["appearance"],
+        wardrobe_default="深蓝行囊式披风短衫",
+    )
+    try:
+        assert_major_characters_distinct([a, b])
+        raised = False
+        err = ""
+    except ValueError as e:
+        raised = True
+        err = str(e)
+    assert raised
+    assert "wardrobe" in err
+
+
+def test_repair_wardrobe_collisions_until_unique():
+    from aivp.pipeline.character_looks import repair_major_wardrobe_collisions
+
+    cards = []
+    for name in ("甲", "乙", "丙"):
+        card = {
+            "name": name,
+            "tier": "major",
+            "age_look": "青年",
+            "gender_presentation": "masculine",
+            "appearance": _full_app(face_shape=f"{name}脸", eyes=f"{name}眼", hair=f"{name}发"),
+            "wardrobe": {"default": "深蓝行囊式披风短衫", "alternate": [], "colors": ["深蓝"]},
+            "prompt_zh": "",
+        }
+        card["prompt_zh"] = compose_character_prompt_zh(
+            name=name,
+            gender_presentation="masculine",
+            age_look="青年",
+            appearance=card["appearance"],
+            wardrobe_default="深蓝行囊式披风短衫",
+        )
+        cards.append(card)
+
+    notes = repair_major_wardrobe_collisions(cards)
+    assert notes, "expected repair notes"
+    wardrobes = [c["wardrobe"]["default"] for c in cards]
+    assert len(set(wardrobes)) == 3
+    for c in cards:
+        assert c["wardrobe"]["default"] in c["prompt_zh"] or c["wardrobe"]["default"].replace(
+            "身着", ""
+        ) in c["prompt_zh"]
+    assert_major_characters_distinct(cards)
+
+
 def test_assert_distinct_raises_on_empty_prompt():
     card = {
         "name": "空",

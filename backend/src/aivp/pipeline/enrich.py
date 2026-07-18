@@ -5,7 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from aivp.jobs.control import JobCancelled
-from aivp.pipeline.character_looks import assert_major_characters_distinct
+from aivp.pipeline.character_looks import assert_major_characters_distinct, repair_major_wardrobe_collisions
 from aivp.pipeline.coerce_assets import (
     ensure_character_card,
     ensure_event_beat,
@@ -16,14 +16,15 @@ from aivp.pipeline.coerce_assets import (
 )
 from aivp.pipeline.select_majors import ENTITY_KEYS, select_majors
 from aivp.pipeline.timeline import build_timeline
-
 ASSET_SYSTEM = (
     "You enrich guofeng story bible assets for video. Output strict JSON with key items "
     "(array of objects). Each object needs name and production fields "
     "(appearance, wardrobe, age_look, prompt_zh). "
     "Use each entity's evidence; characters MUST look distinct from each other "
-    "(different face/hair/wardrobe/prompt_zh). Prefer evidence; mark guesses in "
-    "inferred_fields. No markdown."
+    "(different face/hair/wardrobe/prompt_zh). "
+    "CRITICAL: no two characters may share the same wardrobe.default string "
+    "(e.g. do not reuse 深蓝行囊式披风短衫 on more than one person). "
+    "Prefer evidence; mark guesses in inferred_fields. No markdown."
 )
 
 EVENT_SYSTEM = (
@@ -170,6 +171,8 @@ def build_assets(
             assets[kind].append(_ensure_kind(kind, ent, None, "minor"))
 
     if require_distinct_characters:
+        # Keep rewriting until major wardrobes are unique, then hard-assert.
+        repair_major_wardrobe_collisions(assets.get("characters") or [])
         assert_major_characters_distinct(assets.get("characters") or [])
     return assets
 
@@ -218,6 +221,25 @@ def enrich_event_list(
     return out
 
 
+def _enrich_cache_usable(
+    *,
+    events: Any,
+    assets: Any,
+    draft_events: list[dict],
+    entities: dict,
+) -> bool:
+    """Reject empty/stale enrich artifacts left by a prior failed or empty run."""
+    if not isinstance(events, list) or not isinstance(assets, dict):
+        return False
+    if draft_events and not events:
+        return False
+    entity_chars = entities.get("characters") or []
+    asset_chars = assets.get("characters") or []
+    if entity_chars and not asset_chars:
+        return False
+    return True
+
+
 def run_enrich(
     paths,
     settings,
@@ -228,25 +250,33 @@ def run_enrich(
     force: bool = False,
 ) -> dict[str, Any]:
     warnings: list[str] = []
+    entities = json.loads(paths.entities_json.read_text(encoding="utf-8"))
+    extracts = _load_extracts(paths.extract_dir)
+    chunks = _chunks_meta(paths.chunks_jsonl)
+    extract_map = _extract_map(paths.extract_dir)
+    draft_events = build_timeline(chunks, extract_map)
+
     if (
         not force
         and paths.assets_json.exists()
         and paths.majors_json.exists()
         and paths.events_enriched_json.exists()
     ):
-        return {
-            "majors": json.loads(paths.majors_json.read_text(encoding="utf-8")),
-            "assets": json.loads(paths.assets_json.read_text(encoding="utf-8")),
-            "events": json.loads(paths.events_enriched_json.read_text(encoding="utf-8")),
-            "warnings": ["enrich_skipped_existing"],
-            "skipped": True,
-        }
-
-    entities = json.loads(paths.entities_json.read_text(encoding="utf-8"))
-    extracts = _load_extracts(paths.extract_dir)
-    chunks = _chunks_meta(paths.chunks_jsonl)
-    extract_map = _extract_map(paths.extract_dir)
-    draft_events = build_timeline(chunks, extract_map)
+        cached_events = json.loads(paths.events_enriched_json.read_text(encoding="utf-8"))
+        cached_assets = json.loads(paths.assets_json.read_text(encoding="utf-8"))
+        if _enrich_cache_usable(
+            events=cached_events,
+            assets=cached_assets,
+            draft_events=draft_events,
+            entities=entities,
+        ):
+            return {
+                "majors": json.loads(paths.majors_json.read_text(encoding="utf-8")),
+                "assets": cached_assets,
+                "events": cached_events,
+                "warnings": ["enrich_skipped_existing"],
+                "skipped": True,
+            }
 
     limits = {
         "characters": settings.enrich_top_characters,

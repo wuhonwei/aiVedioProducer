@@ -188,6 +188,19 @@ def run_job(
                 job.chunks_done = result["done"]
                 job.chunks_total = result["total"]
                 warnings.extend(result.get("errors", []))
+                report = result.get("report") or {}
+                extract_total = int(report.get("total") or result.get("total") or 0)
+                extract_ok = int(report.get("succeeded") or 0)
+                extract_failed = int(report.get("failed") or 0)
+                # skip_bad_chunks may skip individual failures, but an all-empty
+                # extract must not continue as a "succeeded" job with blank bible.
+                if extract_total > 0 and extract_ok == 0:
+                    sample = (result.get("errors") or ["unknown"])[0]
+                    raise RuntimeError(
+                        "extract_all_chunks_failed:"
+                        f"succeeded=0 failed={extract_failed} total={extract_total}; "
+                        f"{sample}"
+                    )
                 session.commit()
             elif step == "05_normalize":
                 volumes = _load_volumes(paths)

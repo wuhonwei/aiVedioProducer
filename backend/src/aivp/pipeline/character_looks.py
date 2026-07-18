@@ -47,6 +47,30 @@ _WARDROBE_POOL = (
     "月白交领中衣",
     "深蓝行囊式披风短衫",
 )
+_WARDROBE_EXTRA = (
+    "青灰布衣与半旧蓝布包袱",
+    "粗布家常衣衫",
+    "旧布短褐与斗笠意象",
+    "深色官服长袍",
+    "紧身黑衣劲装",
+    "月白或藕荷交领长裙",
+    "土黄短褐束袖",
+    "绛色交领夹袄",
+    "灰白苎麻长袍",
+    "墨绿劲装束带",
+    "米白短打与布履",
+    "玄青直裰",
+)
+_WARDROBE_MODIFIERS = (
+    "略旧",
+    "洗净新浆",
+    "带风雨痕",
+    "袖口补丁",
+    "腰系草绳",
+    "外罩薄氅",
+    "衣角磨白",
+    "领口滚边",
+)
 _AGE_POOL = (
     "十七至二十岁年轻面相",
     "二十出头青年面相",
@@ -340,6 +364,98 @@ def look_signature(card: dict) -> str:
     return s
 
 
+def normalize_wardrobe(value: Any) -> str:
+    """Collapse wardrobe strings for equality checks."""
+    s = _WS.sub("", _text(value)).lower()
+    s = _PUNCT.sub("", s)
+    if s.startswith("身着"):
+        s = s[2:]
+    return s
+
+
+def _wardrobe_candidates() -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for w in (*_WARDROBE_POOL, *_WARDROBE_EXTRA):
+        key = normalize_wardrobe(w)
+        if key and key not in seen:
+            seen.add(key)
+            out.append(w)
+    return out
+
+
+def _apply_wardrobe(card: dict, wardrobe_default: str) -> None:
+    wardrobe = card.get("wardrobe") if isinstance(card.get("wardrobe"), dict) else {}
+    colors = list(wardrobe.get("colors") or [])
+    card["wardrobe"] = {
+        "default": wardrobe_default,
+        "alternate": list(wardrobe.get("alternate") or []),
+        "colors": colors,
+    }
+    appearance = card.get("appearance") if isinstance(card.get("appearance"), dict) else {}
+    card["prompt_zh"] = compose_character_prompt_zh(
+        name=_text(card.get("name")),
+        gender_presentation=_text(card.get("gender_presentation")),
+        age_look=_text(card.get("age_look")),
+        appearance=appearance,
+        wardrobe_default=wardrobe_default,
+    )
+
+
+def _next_unique_wardrobe(taken: set[str], *, name: str, round_i: int) -> str:
+    for cand in _wardrobe_candidates():
+        key = normalize_wardrobe(cand)
+        if key and key not in taken:
+            return cand
+    # Exhausted pool — synthesize until unique.
+    base = _wardrobe_candidates()[_name_slot(name or "x", len(_wardrobe_candidates()))]
+    n = 0
+    while True:
+        mod = _WARDROBE_MODIFIERS[(round_i + n) % len(_WARDROBE_MODIFIERS)]
+        cand = f"{base}（{mod}·{n + 1}）" if n else f"{base}（{mod}）"
+        key = normalize_wardrobe(cand)
+        if key and key not in taken:
+            return cand
+        n += 1
+
+
+def repair_major_wardrobe_collisions(characters: list[dict]) -> list[str]:
+    """Keep rewriting colliding major wardrobes until all defaults are unique.
+
+    First occurrence of a wardrobe is kept; later majors are reassigned from
+    unused pool entries, then synthetic variants. Always terminates.
+    """
+    notes: list[str] = []
+    round_i = 0
+    while True:
+        majors = [c for c in characters if (c.get("tier") or "") == "major"]
+        if len(majors) <= 1:
+            return notes
+        owners: dict[str, str] = {}
+        collisions: list[dict] = []
+        for card in majors:
+            wardrobe = card.get("wardrobe") if isinstance(card.get("wardrobe"), dict) else {}
+            key = normalize_wardrobe(wardrobe.get("default"))
+            if not key:
+                # Empty wardrobe is handled by assert; skip repair ownership.
+                continue
+            if key in owners:
+                collisions.append(card)
+            else:
+                owners[key] = _text(card.get("name")) or "?"
+        if not collisions:
+            return notes
+        taken = set(owners.keys())
+        for card in collisions:
+            old = _text((card.get("wardrobe") or {}).get("default"))
+            name = _text(card.get("name")) or "?"
+            new = _next_unique_wardrobe(taken, name=name, round_i=round_i)
+            _apply_wardrobe(card, new)
+            taken.add(normalize_wardrobe(new))
+            notes.append(f"wardrobe_collision_repaired:{name}:{old}->{new}")
+        round_i += 1
+
+
 def assert_major_characters_distinct(characters: list[dict]) -> None:
     """Raise ValueError if any major pair collides or lacks required look fields."""
     majors = [c for c in characters if (c.get("tier") or "") == "major"]
@@ -372,6 +488,18 @@ def assert_major_characters_distinct(characters: list[dict]) -> None:
         for key in required_app:
             if not _text(appearance.get(key)):
                 raise ValueError(f"enrich_distinct_characters_failed:empty_{key}:{name}")
+
+    wardrobe_seen: dict[str, str] = {}
+    for card in majors:
+        name = _text(card.get("name")) or "?"
+        wardrobe = card.get("wardrobe") if isinstance(card.get("wardrobe"), dict) else {}
+        wkey = normalize_wardrobe(wardrobe.get("default"))
+        if wkey in wardrobe_seen:
+            other = wardrobe_seen[wkey]
+            raise ValueError(
+                f"enrich_distinct_characters_failed:wardrobe_collision:{other}|{name}:{wkey[:80]}"
+            )
+        wardrobe_seen[wkey] = name
 
     seen: dict[str, str] = {}
     for card in majors:

@@ -282,14 +282,6 @@ def run_shot_script(
     offset: int | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    if (
-        not force
-        and paths.shot_script_json.exists()
-        and not (volume_id or chapter_from or chapter_to or event_ids or offset is not None)
-    ):
-        existing = json.loads(paths.shot_script_json.read_text(encoding="utf-8"))
-        return {**existing, "skipped": True}
-
     if not paths.events_json.exists() and not paths.auto_bible_json.exists():
         raise FileNotFoundError("timeline_or_bible_missing")
 
@@ -298,6 +290,17 @@ def run_shot_script(
     else:
         bible = json.loads(paths.auto_bible_json.read_text(encoding="utf-8"))
         events = bible.get("timeline") or []
+
+    if (
+        not force
+        and paths.shot_script_json.exists()
+        and not (volume_id or chapter_from or chapter_to or event_ids or offset is not None)
+    ):
+        existing = json.loads(paths.shot_script_json.read_text(encoding="utf-8"))
+        existing_shots = list(existing.get("shots") or [])
+        # Empty shot cache from a prior zero-event run must not block rebuild.
+        if existing_shots or not events:
+            return {**existing, "skipped": True}
 
     assets = None
     if paths.assets_json.exists():
@@ -359,10 +362,15 @@ def run_shot_script(
             ch_ids = set(vol.get("chapter_ids") or [])
             vol_events = _filter_events(events, chapter_ids=ch_ids)
             vol_path = paths.shot_script_volume_json(vol["id"])
+            reuse_volume = False
             if not force and vol_path.exists() and not (chapter_from or chapter_to):
                 vol_doc = json.loads(vol_path.read_text(encoding="utf-8"))
                 vol_shots = list(vol_doc.get("shots") or [])
-                warnings.append(f"shot_volume_skipped_existing:{vol['id']}")
+                if vol_shots or not vol_events:
+                    reuse_volume = True
+                    warnings.append(f"shot_volume_skipped_existing:{vol['id']}")
+            if reuse_volume:
+                pass
             else:
                 vol_shots, vol_warn = expand_events_with_llm(
                     vol_events,

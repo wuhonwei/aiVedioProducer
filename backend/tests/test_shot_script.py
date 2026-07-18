@@ -63,3 +63,42 @@ def test_run_shot_script_writes_file(tmp_path: Path):
     assert paths.shot_script_index_json.exists()
     assert doc["shot_count"] >= 1
     assert paths.asset_plan_json.exists()
+
+
+def test_run_shot_script_does_not_skip_empty_stale_cache(tmp_path: Path):
+    settings = Settings(data_root=tmp_path, deepseek_api_key="")
+    paths = ProjectPaths(tmp_path, "s2")
+    paths.ensure()
+    paths.events_json.write_text(
+        '[{"id":"evt0001","chapter_id":"ch001","summary":"相遇","cast":["甲"],'
+        '"visual_beat":"雨夜对峙","camera_hint":"中景"}]',
+        encoding="utf-8",
+    )
+    paths.shot_script_dir.mkdir(parents=True, exist_ok=True)
+    paths.shot_script_json.write_text(
+        '{"schema_version":2,"event_count":0,"shot_count":0,"shots":[],"warnings":[]}',
+        encoding="utf-8",
+    )
+    llm = FakeLlm(
+        default={
+            "shots": [
+                {
+                    "event_id": "evt0001",
+                    "order": 1,
+                    "shot_type": "wide",
+                    "camera": "中景",
+                    "action": "对峙",
+                    "dialogue": "",
+                    "duration_sec": 3,
+                    "visual_prompt": "雨夜",
+                    "audio_notes": "",
+                    "cast": ["甲"],
+                    "location_name": "",
+                }
+            ]
+        }
+    )
+    doc = run_shot_script(paths, settings, llm, force=False)
+    assert doc.get("skipped") is not True
+    assert doc["shot_count"] >= 1
+    assert doc["shots"]
