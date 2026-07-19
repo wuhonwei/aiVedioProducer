@@ -39,6 +39,16 @@ def _load_name_to_id_map(project_paths: ProjectPaths) -> dict[str, str]:
     return build_name_to_id_map(assets, entities)
 
 
+def _dedupe_preserve_order(ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in ids:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
 def _resolve_shot_asset_ids(
     shot: dict[str, Any],
     name_to_id: dict[str, str],
@@ -69,8 +79,14 @@ def _resolve_shot_asset_ids(
             if not key:
                 continue
             character_ids.append(name_to_id.get(key) or key)
+    else:
+        character_ids = [name_to_id.get(key) or key for key in character_ids]
 
-    if not location_id:
+    character_ids = _dedupe_preserve_order(character_ids)
+
+    if location_id:
+        location_id = name_to_id.get(location_id) or location_id
+    elif not location_id:
         location_id = str(shot.get("location_id") or "").strip() or None
     if not location_id:
         loc_names = list(assets_required.get("locations") or [])

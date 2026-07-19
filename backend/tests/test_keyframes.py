@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from aivp.api.app import create_app
 from aivp.config import Settings
-from aivp.keyframes.generate import generate_keyframes
+from aivp.keyframes.generate import _resolve_shot_asset_ids, generate_keyframes
 from aivp.keyframes.paths import KeyframePaths
 from aivp.keyframes.store import (
     delete_candidate,
@@ -273,6 +273,49 @@ def test_generate_keyframes_warns_too_many_loras_with_location(tmp_path: Path):
     )
     assert out["status"] == "succeeded"
     assert "too_many_loras" in out["warnings"]
+
+
+def test_resolve_shot_asset_ids_maps_display_names():
+    shot = {
+        "asset_refs": {
+            "characters": ["林砚之", "陈守义", "林砚之"],
+            "locations": ["青渡川"],
+        }
+    }
+    name_to_id = {
+        "林砚之": "ent_0001",
+        "陈守义": "ent_0002",
+        "青渡川": "loc_1",
+    }
+    cids, lid = _resolve_shot_asset_ids(shot, name_to_id)
+    assert cids == ["ent_0001", "ent_0002"]
+    assert lid == "loc_1"
+
+
+def test_generate_keyframes_resolves_display_names_to_ids(tmp_path: Path):
+    paths, v, k = _seed_shot_project(tmp_path)
+    doc = json.loads(paths.shot_script_json.read_text(encoding="utf-8"))
+    doc["shots"][0]["asset_refs"] = {"characters": ["林"], "locations": [], "props": []}
+    paths.shot_script_json.write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+    )
+    paths.assets_json.parent.mkdir(parents=True, exist_ok=True)
+    paths.assets_json.write_text(
+        json.dumps(
+            {
+                "characters": [{"id": "ent_1", "name": "林", "canonical_name": "林"}],
+                "locations": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _mark_character_lora_ready(v, "ent_1")
+    out = generate_keyframes(paths, v, k, StubImageBackend(), "shot_000001", count=1)
+    gen = read_generation(k, "shot_000001")
+    assert gen["character_ids"] == ["ent_1"]
+    assert not any(w.startswith("character_lora_not_ready:林") for w in out["warnings"])
+    assert gen["loras"]
 
 
 def test_generate_keyframes_resolves_cast_names_when_asset_refs_empty(tmp_path: Path):
