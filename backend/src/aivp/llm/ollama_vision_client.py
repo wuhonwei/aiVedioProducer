@@ -12,6 +12,18 @@ import httpx
 from aivp.jobs.control import JobCancelled
 
 
+def _strip_json_fences(content: str) -> str:
+    text = content.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+    return text
+
+
 class OllamaVisionClient:
     """Ollama multimodal chat (e.g. qwen2.5vl) with JSON responses."""
 
@@ -69,7 +81,10 @@ class OllamaVisionClient:
             r = client.post(f"{self.base_url}/api/chat", json=payload)
             r.raise_for_status()
             content = r.json()["message"]["content"]
-        data = json.loads(content)
+        try:
+            data = json.loads(_strip_json_fences(content))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"ollama_vision_invalid_json:{exc}") from exc
         if not isinstance(data, dict):
             raise ValueError("ollama_vision_json_not_object")
         return data

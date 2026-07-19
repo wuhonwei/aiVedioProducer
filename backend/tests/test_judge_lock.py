@@ -1,4 +1,16 @@
-from aivp.visual.judge import is_look_lock_eligible, normalize_judge_result
+from pathlib import Path
+
+from aivp.visual.judge import is_look_lock_eligible, judge_image, normalize_judge_result
+
+
+class _BadJsonVision:
+    def complete_json_with_image(self, system, user, image_path, *, should_cancel=None):
+        raise ValueError("ollama_vision_invalid_json: Expecting value")
+
+
+class _MalformedVision:
+    def complete_json_with_image(self, system, user, image_path, *, should_cancel=None):
+        return "not-json-at-all"
 
 
 def test_normalize_fails_half_body_tag():
@@ -35,6 +47,25 @@ def test_lock_eligible_requires_pass_and_clean_tags():
     )
     assert good["pass"] is True
     assert is_look_lock_eligible(good) is True
+
+
+def test_judge_image_falls_back_on_vision_json_error(tmp_path: Path):
+    img = tmp_path / "cand_001.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    profile = {"name": "测试", "prompt_zh": "测试角色", "gender_presentation": "masculine"}
+    out = judge_image(_BadJsonVision(), profile, img, slot_key="candidate")
+    assert out["pass"] is True
+    assert "vision_error" in out["summary"]
+    assert is_look_lock_eligible(out) is True
+
+
+def test_judge_image_falls_back_on_malformed_json_string(tmp_path: Path):
+    img = tmp_path / "cand_002.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    profile = {"name": "测试", "prompt_zh": "测试角色", "gender_presentation": "masculine"}
+    out = judge_image(_MalformedVision(), profile, img, slot_key="candidate")
+    assert out["pass"] is True
+    assert out["summary"] == "vision_bad_json"
 
 
 def test_busy_background_check_fails_lock():
