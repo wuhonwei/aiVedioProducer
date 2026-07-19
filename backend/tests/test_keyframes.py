@@ -275,6 +275,54 @@ def test_generate_keyframes_warns_too_many_loras_with_location(tmp_path: Path):
     assert "too_many_loras" in out["warnings"]
 
 
+def test_generate_keyframes_resolves_cast_names_when_asset_refs_empty(tmp_path: Path):
+    paths = ProjectPaths(tmp_path, "p1")
+    paths.ensure()
+    v = VisualPaths(tmp_path, "p1")
+    v.ensure()
+    k = KeyframePaths(tmp_path, "p1")
+    k.ensure()
+    paths.assets_json.parent.mkdir(parents=True, exist_ok=True)
+    paths.assets_json.write_text(
+        json.dumps(
+            {
+                "characters": [{"id": "ent_1", "name": "林", "canonical_name": "林"}],
+                "locations": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    ch = {"id": "ent_1", "name": "林", "tier": "major", "prompt_zh": "青衣少年"}
+    ensure_profile(v, ch)
+    _mark_character_lora_ready(v, "ent_1")
+    doc = {
+        "schema_version": 2,
+        "shots": [
+            {
+                "shot_id": "shot_000001",
+                "visual_prompt": "立于渡口远眺",
+                "negative_prompt": "lowres",
+                "cast": ["林"],
+                "asset_refs": {"characters": [], "locations": [], "props": []},
+                "generation": {},
+            }
+        ],
+    }
+    paths.shot_script_json.write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+    )
+
+    out = generate_keyframes(
+        paths, v, k, StubImageBackend(), "shot_000001", count=1
+    )
+    assert out["status"] == "succeeded"
+    assert out["generation"]["character_ids"] == ["ent_1"]
+    gen = read_generation(k, "shot_000001")
+    assert gen and gen["character_ids"] == ["ent_1"]
+    assert "character_lora_not_ready:ent_1" not in out["warnings"]
+
+
 def test_keyframes_api_generate_get_select(tmp_path: Path):
     app = create_app(
         Settings(

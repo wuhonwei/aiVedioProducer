@@ -10,6 +10,7 @@ from typing import Any
 from aivp.keyframes.paths import KeyframePaths
 from aivp.keyframes.store import next_candidate_stem
 from aivp.paths import ProjectPaths
+from aivp.pipeline.shot_upgrade import build_name_to_id_map
 from aivp.visual.image_backend import ComfyImageBackend, ImageBackend, StubImageBackend
 from aivp.visual.location_profiles import read_location_profile
 from aivp.visual.paths import VisualPaths
@@ -26,6 +27,64 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _load_name_to_id_map(project_paths: ProjectPaths) -> dict[str, str]:
+    entities = None
+    assets = None
+    if project_paths.entities_json.exists():
+        entities = json.loads(project_paths.entities_json.read_text(encoding="utf-8"))
+    if project_paths.assets_json.exists():
+        assets = json.loads(project_paths.assets_json.read_text(encoding="utf-8"))
+    return build_name_to_id_map(assets, entities)
+
+
+def _resolve_shot_asset_ids(
+    shot: dict[str, Any],
+    name_to_id: dict[str, str],
+) -> tuple[list[str], str | None]:
+    """Prefer asset_refs ids; fall back to cast/location names via name map."""
+    asset_refs = shot.get("asset_refs") if isinstance(shot.get("asset_refs"), dict) else {}
+    character_ids = [
+        str(x).strip() for x in (asset_refs.get("characters") or []) if str(x).strip()
+    ]
+    locations = [
+        str(x).strip() for x in (asset_refs.get("locations") or []) if str(x).strip()
+    ]
+    location_id = locations[0] if locations else None
+
+    assets_required = (
+        shot.get("assets_required") if isinstance(shot.get("assets_required"), dict) else {}
+    )
+
+    if not character_ids:
+        cast_names = list(
+            assets_required.get("characters")
+            or shot.get("cast")
+            or shot.get("characters")
+            or []
+        )
+        for name in cast_names:
+            key = str(name).strip()
+            if not key:
+                continue
+            character_ids.append(name_to_id.get(key) or key)
+
+    if not location_id:
+        location_id = str(shot.get("location_id") or "").strip() or None
+    if not location_id:
+        loc_names = list(assets_required.get("locations") or [])
+        loc_name = str(shot.get("location") or shot.get("location_name") or "").strip()
+        if loc_name:
+            loc_names = loc_names or [loc_name]
+        for name in loc_names:
+            key = str(name).strip()
+            if not key:
+                continue
+            location_id = name_to_id.get(key) or key
+            break
+
+    return character_ids, location_id
 
 
 def _load_shot(project_paths: ProjectPaths, shot_id: str) -> dict[str, Any]:
@@ -125,10 +184,8 @@ def generate_keyframes(
     settings=None,
 ) -> dict[str, Any]:
     shot = _load_shot(project_paths, shot_id)
-    asset_refs = shot.get("asset_refs") if isinstance(shot.get("asset_refs"), dict) else {}
-    character_ids = list(asset_refs.get("characters") or [])
-    locations = list(asset_refs.get("locations") or [])
-    location_id = str(locations[0]) if locations else None
+    name_to_id = _load_name_to_id_map(project_paths)
+    character_ids, location_id = _resolve_shot_asset_ids(shot, name_to_id)
 
     prompt = (prompt_override or shot.get("visual_prompt") or "").strip()
     if not prompt:

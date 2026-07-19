@@ -810,6 +810,16 @@ export const rejectKeyframe = (
     },
   );
 
+export const deleteKeyframeCandidate = (
+  projectId: string,
+  shotId: string,
+  filename: string,
+) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/keyframes/${encodeURIComponent(shotId)}/candidates/${encodeURIComponent(filename)}`,
+    { method: "DELETE" },
+  );
+
 export const keyframeFileUrl = (
   projectId: string,
   shotId: string,

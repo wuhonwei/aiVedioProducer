@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  deleteKeyframeCandidate,
   exportShotsYaml,
   generateKeyframes,
   getAssetPlan,
@@ -123,6 +124,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   const [kfStatus, setKfStatus] = useState("empty");
   const [kfCandidates, setKfCandidates] = useState<KfCandidate[]>([]);
   const [kfSelected, setKfSelected] = useState<KfSelected>(null);
+  const [kfWarnings, setKfWarnings] = useState<string[]>([]);
   const [lightbox, setLightbox] = useState<Lightbox>(null);
   const genTokenRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
@@ -274,6 +276,18 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
     setKfStatus(String(data.status || "empty"));
     setKfCandidates((data.candidates as KfCandidate[]) || []);
     setKfSelected((data.selected as KfSelected) || null);
+    const topWarnings = Array.isArray(data.warnings)
+      ? data.warnings.map(String)
+      : [];
+    const generation = data.generation as { warnings?: unknown[] } | undefined;
+    const genWarnings = Array.isArray(generation?.warnings)
+      ? generation.warnings.map(String)
+      : [];
+    const merged = [...topWarnings];
+    for (const warning of genWarnings) {
+      if (!merged.includes(warning)) merged.push(warning);
+    }
+    setKfWarnings(merged.slice(0, 5));
   };
 
   const reloadKeyframes = async (shotId: string) => {
@@ -287,6 +301,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
       setKfStatus("empty");
       setKfCandidates([]);
       setKfSelected(null);
+      setKfWarnings([]);
       return;
     }
     let cancelled = false;
@@ -300,6 +315,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
           setKfStatus("empty");
           setKfCandidates([]);
           setKfSelected(null);
+          setKfWarnings([]);
         }
       }
     })();
@@ -371,7 +387,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
     setGenBusy(true);
     setError(null);
     try {
-      await generateKeyframes(projectId, selectedId, {
+      const out = await generateKeyframes(projectId, selectedId, {
         count: 4,
         use_location_lora: useLocationLora,
         prompt_override: draft.visual_prompt || selected.visual_prompt || "",
@@ -379,6 +395,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
       });
       if (genTokenRef.current !== token) return;
       if (selectedIdRef.current !== shotIdAtStart) return;
+      applyKeyframeData(out);
       await reloadKeyframes(selectedId);
     } catch (e) {
       if (genTokenRef.current === token && selectedIdRef.current === shotIdAtStart) {
@@ -420,6 +437,27 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
     setError(null);
     try {
       await rejectKeyframe(projectId, selectedId, filename);
+      if (genTokenRef.current !== token || selectedIdRef.current !== shotIdAtStart) return;
+      await reloadKeyframes(selectedId);
+    } catch (e) {
+      if (genTokenRef.current === token && selectedIdRef.current === shotIdAtStart) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (genTokenRef.current === token) {
+        setGenBusy(false);
+      }
+    }
+  };
+
+  const onDeleteKeyframe = async (filename: string) => {
+    if (!selectedId) return;
+    const shotIdAtStart = selectedId;
+    const token = ++genTokenRef.current;
+    setGenBusy(true);
+    setError(null);
+    try {
+      await deleteKeyframeCandidate(projectId, selectedId, filename);
       if (genTokenRef.current !== token || selectedIdRef.current !== shotIdAtStart) return;
       await reloadKeyframes(selectedId);
     } catch (e) {
@@ -678,6 +716,11 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
                 {kfSelected.note ? ` · ${kfSelected.note}` : ""}
               </p>
             )}
+            {kfWarnings.length > 0 && (
+              <p className="note" aria-label="keyframe-warnings">
+                提示：{kfWarnings.join("；")}
+              </p>
+            )}
             {kfCandidates.length > 0 && (
               <div
                 className="bible-cards visual-thumbs"
@@ -731,6 +774,14 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
                           onClick={() => void onRejectKeyframe(candidate.file)}
                         >
                           退回
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={locked || genBusy}
+                          onClick={() => void onDeleteKeyframe(candidate.file)}
+                        >
+                          删除
                         </button>
                       </div>
                     </article>
