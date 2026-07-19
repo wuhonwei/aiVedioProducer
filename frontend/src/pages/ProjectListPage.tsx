@@ -3,7 +3,6 @@ import { createProject, deleteProject, listProjects, type Project } from "../api
 
 type Props = {
   onSelect: (projectId: string) => void;
-  currentProjectId?: string | null;
   onDeleted?: (projectId: string) => void;
 };
 

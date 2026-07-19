@@ -88,12 +88,11 @@ export default function App() {
 
       {page === "list" && (
         <ProjectListPage
-          currentProjectId={projectId}
           onSelect={(id) => {
             go("pipeline", id);
           }}
-          onDeleted={(id) => {
-            if (id === projectId) go("list");
+          onDeleted={() => {
+            go("list");
           }}
         />
       )}

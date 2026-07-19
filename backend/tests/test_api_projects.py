@@ -83,3 +83,31 @@ def test_delete_project_rejects_dotdot_id(tmp_path: Path):
     client = TestClient(app)
     r = client.delete("/api/projects/%2e%2e")  # ".."
     assert r.status_code == 400
+
+
+def test_delete_project_disk_failure_still_removes_db(
+    tmp_path: Path, monkeypatch
+):
+    app = create_app(
+        Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path / 'del_disk.db'}")
+    )
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"name": "磁盘失败"}).json()["id"]
+    paths = ProjectPaths(tmp_path, pid)
+    paths.ensure()
+    (paths.root / "marker.txt").write_text("x", encoding="utf-8")
+    assert paths.root.is_dir()
+
+    def fail_rmtree(_path):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("aivp.api.routes_projects.shutil.rmtree", fail_rmtree)
+
+    r = client.delete(f"/api/projects/{pid}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deleted"] is True
+    assert body["id"] == pid
+    assert body["warning"].startswith("disk_delete_failed")
+    assert client.get(f"/api/projects/{pid}").status_code == 404
+    assert all(p["id"] != pid for p in client.get("/api/projects").json())
