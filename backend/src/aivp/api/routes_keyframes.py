@@ -71,6 +71,7 @@ class GenerateBody(BaseModel):
     force: bool = False
     prompt_override: str = ""
     negative_override: str = ""
+    character_lora_strength: float | None = None
 
 
 class SelectBody(BaseModel):
@@ -109,6 +110,7 @@ def generate_keyframes_endpoint(
             force=body.force,
             prompt_override=body.prompt_override,
             negative_override=body.negative_override,
+            character_lora_strength=body.character_lora_strength,
             settings=settings,
         )
     except FileNotFoundError as e:

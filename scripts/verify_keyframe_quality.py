@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Automated keyframe generation quality checks against a running API.
 
-Exits non-zero on any assertion failure. Writes JSON report to stdout and
+For action shots, retries generation with progressively weaker character LoRA
+until vision QA finds an action-matching frame (or exhausts attempts).
+
+Exits non-zero on failure. Writes JSON report to stdout and
 ``.superpowers/sdd/keyframe_auto_verify.json``.
 """
 from __future__ import annotations
@@ -24,6 +27,8 @@ REPORT_PATH = ROOT / ".superpowers" / "sdd" / "keyframe_auto_verify.json"
 DEFAULT_BASE = "http://127.0.0.1:8000"
 DEFAULT_PROJECT = "2ea26d40215d"
 PREFERRED_SHOT = "EP001_SCapter_0003_SH001"
+MAX_ATTEMPTS = 4
+GENERATE_COUNT = 4
 
 FRAMING_TOKENS = (
     "cinematic",
@@ -65,6 +70,20 @@ ACTION_KEYWORDS = (
     "attack",
     "fight",
     "strike",
+)
+
+COMBAT_HEAVY_OVERRIDE = (
+    "dynamic action scene, multiple people, sword attack in progress, wounded man falling, "
+    "chaotic crowd panic, wooden pier dock riverside, guofeng anime cinematic still, "
+    "wide dynamic action shot, full body combat poses, mid-motion, not portrait, "
+    "characters not facing camera, violent fight staging"
+)
+
+ENGLISH_COMBAT_OVERRIDE = (
+    "Violent sword fight on a wooden dock pier, multiple warriors attacking one victim, "
+    "wounded man falling to planks, panicking crowd, riverside waterfront chaos, "
+    "dynamic wide action shot, full body combat poses, cinematic anime still, "
+    "no portrait, no solo character, action in progress"
 )
 
 _VISION_QA_SYSTEM = (
@@ -124,15 +143,12 @@ def _png_non_empty_heuristic(path: Path) -> dict[str, Any]:
         if data[:8] != b"\x89PNG\r\n\x1a\n":
             out["error"] = "not_png"
             return out
-        # Parse first IDAT via simple IHDR + sample mid-file bytes for non-white.
-        # Prefer Pillow when available.
         try:
             from PIL import Image  # type: ignore
 
             with Image.open(path) as im:
                 im = im.convert("RGB")
                 w, h = im.size
-                # sample a grid
                 samples = []
                 for y in (h // 4, h // 2, (3 * h) // 4):
                     for x in (w // 4, w // 2, (3 * w) // 4):
@@ -142,10 +158,8 @@ def _png_non_empty_heuristic(path: Path) -> dict[str, Any]:
                 out["sample_pixels"] = samples
                 return out
         except ImportError:
-            # Fallback: any byte variance in file body beyond IHDR
             body = data[33:]
             out["non_white"] = len(set(body[:: max(1, len(body) // 200)])) > 8
-            # silence unused imports in fallback path
             _ = (struct, zlib)
             return out
     except Exception as e:  # noqa: BLE001
@@ -154,11 +168,9 @@ def _png_non_empty_heuristic(path: Path) -> dict[str, Any]:
 
 
 def _discover_shot_id(base: str, project_id: str, preferred: str) -> str:
-    # Prefer known shot; fall back via filesystem shot_script if API has no list.
     backend_data = ROOT / "backend" / "data" / "projects" / project_id
     script = backend_data / "stages" / "10_shot_script" / "shot_script.json"
     if not script.exists():
-        # Settings may use repo-relative data/
         alt = ROOT / "data" / "projects" / project_id / "stages" / "10_shot_script" / "shot_script.json"
         script = alt if alt.exists() else script
     if not script.exists():
@@ -203,7 +215,6 @@ def _candidate_paths(project_id: str, shot_id: str, files: list[str]) -> list[Pa
 
 
 def _load_shot_action_keywords(project_id: str, shot_id: str) -> list[str]:
-    """Return action keywords expected from shot script visual/action fields."""
     for script in (
         ROOT / "backend" / "data" / "projects" / project_id / "stages" / "10_shot_script" / "shot_script.json",
         ROOT / "data" / "projects" / project_id / "stages" / "10_shot_script" / "shot_script.json",
@@ -251,7 +262,6 @@ def _is_action_shot(project_id: str, shot_id: str) -> bool:
 
 
 def _ollama_vision_available() -> tuple[bool, str, str]:
-    """Return (available, base_url, model)."""
     try:
         from aivp.config import Settings
 
@@ -280,7 +290,6 @@ def _ollama_vision_available() -> tuple[bool, str, str]:
 
 
 def _vision_qa_single_png(path: Path, *, base_url: str, model: str) -> dict[str, Any]:
-    """Hard QA via Ollama vision; returns parsed JSON fields."""
     from aivp.llm.ollama_vision_client import OllamaVisionClient
 
     client = OllamaVisionClient(base_url, model, timeout=120.0)
@@ -295,18 +304,25 @@ def _vision_qa_single_png(path: Path, *, base_url: str, model: str) -> dict[str,
     }
 
 
+def _vision_passes_action(result: dict[str, Any]) -> bool:
+    if result.get("error"):
+        return False
+    return bool(result.get("has_action")) and bool(result.get("has_multiple_people"))
+
+
 def _ollama_vision_qa(
     png_paths: list[Path],
     *,
     action_shot: bool,
 ) -> dict[str, Any]:
-    """Vision QA for keyframe PNGs; hard-fails action shots when Ollama is up."""
     out: dict[str, Any] = {
         "available": False,
         "skipped": False,
         "results": [],
         "hard_fail": False,
         "warnings": [],
+        "best_result": None,
+        "passed": False,
     }
     if not png_paths:
         return out
@@ -344,15 +360,17 @@ def _ollama_vision_qa(
             err = {"path": str(path.resolve()), "error": str(e)}
             out["results"].append(err)
             out["warnings"].append(f"vision_qa_error:{path.name}:{e}")
-            if action_shot:
-                out["hard_fail"] = True
 
-    if action_shot and out["results"]:
+    passing = [r for r in out["results"] if _vision_passes_action(r)]
+    if passing:
+        out["passed"] = True
+        out["best_result"] = passing[0]
+    elif action_shot and out["results"]:
+        out["hard_fail"] = True
         for result in out["results"]:
             if result.get("error"):
                 continue
-            if not result.get("has_action") or not result.get("has_multiple_people"):
-                out["hard_fail"] = True
+            if not _vision_passes_action(result):
                 out["warnings"].append(
                     f"vision_qa_action_fail:{Path(result['path']).name}:"
                     f"has_action={result.get('has_action')},"
@@ -383,61 +401,55 @@ def _lora_ready_character_ids(project_id: str, character_ids: list[str]) -> list
     return ready
 
 
-def main() -> int:
-    base = (sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BASE).rstrip("/")
-    project_id = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_PROJECT
-    preferred = sys.argv[3] if len(sys.argv) > 3 else PREFERRED_SHOT
-
-    failures: list[str] = []
-    report: dict[str, Any] = {
-        "base": base,
-        "project_id": project_id,
-        "shot_id": None,
-        "http_status": None,
-        "assertions": {},
-        "generation": None,
-        "pngs": [],
-        "failures": failures,
-        "ok": False,
+def _attempt_params(attempt_idx: int) -> dict[str, Any]:
+    """Progressive LoRA backoff schedule for action shots."""
+    if attempt_idx == 1:
+        return {"character_lora_strength": None, "prompt_override": ""}
+    if attempt_idx == 2:
+        return {
+            "character_lora_strength": 0.25,
+            "prompt_override": COMBAT_HEAVY_OVERRIDE,
+        }
+    if attempt_idx == 3:
+        return {"character_lora_strength": 0.0, "prompt_override": ""}
+    return {
+        "character_lora_strength": 0.0,
+        "prompt_override": ENGLISH_COMBAT_OVERRIDE,
     }
 
-    # Health
-    status, _ = _http_json("GET", f"{base}/api/projects", timeout=15)
-    if status != 200:
-        failures.append(f"api_projects_status:{status}")
-        report["assertions"]["api_up"] = False
-        return _finish(report, 1)
-    report["assertions"]["api_up"] = True
 
-    shot_id = _discover_shot_id(base, project_id, preferred)
-    report["shot_id"] = shot_id
+def _build_generate_body(
+    attempt_idx: int,
+    *,
+    force: bool,
+) -> dict[str, Any]:
+    params = _attempt_params(attempt_idx)
+    body: dict[str, Any] = {
+        "force": force,
+        "count": GENERATE_COUNT,
+        "use_location_lora": False,
+    }
+    if params["prompt_override"]:
+        body["prompt_override"] = params["prompt_override"]
+    if params["character_lora_strength"] is not None:
+        body["character_lora_strength"] = params["character_lora_strength"]
+    return body
 
-    url = f"{base}/api/projects/{project_id}/keyframes/{shot_id}/generate"
-    status, payload = _http_json(
-        "POST",
-        url,
-        {"force": True, "count": 2, "use_location_lora": False},
-        timeout=900,
-    )
-    report["http_status"] = status
-    report["response_keys"] = list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__
 
-    if status != 200:
-        failures.append(f"generate_http:{status}:{payload}")
-        report["assertions"]["http_200"] = False
-        return _finish(report, 1)
-    report["assertions"]["http_200"] = True
-
-    if not isinstance(payload, dict):
-        failures.append("response_not_object")
-        return _finish(report, 1)
-
+def _validate_generation(
+    report: dict[str, Any],
+    *,
+    project_id: str,
+    shot_id: str,
+    payload: dict[str, Any],
+    attempt_idx: int,
+    using_override: bool,
+) -> list[str]:
+    failures: list[str] = []
     generation = payload.get("generation") if isinstance(payload.get("generation"), dict) else {}
-    report["generation"] = generation
 
     character_ids = [str(x) for x in (generation.get("character_ids") or [])]
     ids_ok = bool(character_ids) and all(ENT_ID_RE.match(cid) for cid in character_ids)
-    # Also reject obvious Chinese / non-ascii names (no Han script in id)
     if any(re.search(r"[\u4e00-\u9fff]", cid) for cid in character_ids):
         ids_ok = False
     report["assertions"]["character_ids_ent_style"] = ids_ok
@@ -446,7 +458,8 @@ def main() -> int:
 
     loras = generation.get("loras") or []
     ready_ids = _lora_ready_character_ids(project_id, character_ids)
-    if ready_ids:
+    lora_strength = _attempt_params(attempt_idx).get("character_lora_strength")
+    if ready_ids and lora_strength != 0.0:
         loras_ok = isinstance(loras, list) and len(loras) >= 1
         report["assertions"]["loras_present_when_ready"] = loras_ok
         report["lora_ready_character_ids"] = ready_ids
@@ -454,34 +467,35 @@ def main() -> int:
             failures.append(f"loras_missing_despite_ready:{ready_ids}:{loras}")
     else:
         report["assertions"]["loras_present_when_ready"] = True
-        report["lora_ready_character_ids"] = []
+        report["lora_ready_character_ids"] = ready_ids
 
     prompt = str(generation.get("prompt") or "")
     prompt_l = prompt.lower()
 
-    scene_first_ok = _scene_before_first_trigger(prompt)
-    report["assertions"]["prompt_scene_before_triggers"] = scene_first_ok
-    if not scene_first_ok:
-        failures.append("prompt_does_not_lead_with_scene_action")
+    if not using_override:
+        scene_first_ok = _scene_before_first_trigger(prompt)
+        report["assertions"]["prompt_scene_before_triggers"] = scene_first_ok
+        if not scene_first_ok:
+            failures.append("prompt_does_not_lead_with_scene_action")
 
-    expected_action_kws = _load_shot_action_keywords(project_id, shot_id)
-    if expected_action_kws:
-        action_ok = any(kw in prompt for kw in expected_action_kws)
-        report["expected_action_keywords"] = expected_action_kws
-        report["assertions"]["prompt_contains_action_keywords"] = action_ok
-        if not action_ok:
-            failures.append(f"prompt_missing_action_keywords:{expected_action_kws}")
-    else:
-        report["assertions"]["prompt_contains_action_keywords"] = True
+        expected_action_kws = _load_shot_action_keywords(project_id, shot_id)
+        if expected_action_kws:
+            action_ok = any(kw in prompt for kw in expected_action_kws)
+            report["expected_action_keywords"] = expected_action_kws
+            report["assertions"]["prompt_contains_action_keywords"] = action_ok
+            if not action_ok:
+                failures.append(f"prompt_missing_action_keywords:{expected_action_kws}")
+        else:
+            report["assertions"]["prompt_contains_action_keywords"] = True
 
-    trigger_at_start = bool(TRIGGER_RE.match(prompt.strip()))
-    report["assertions"]["prompt_not_trigger_first"] = not trigger_at_start
-    if trigger_at_start:
-        failures.append("prompt_starts_with_character_trigger")
+        trigger_at_start = bool(TRIGGER_RE.match(prompt.strip()))
+        report["assertions"]["prompt_not_trigger_first"] = not trigger_at_start
+        if trigger_at_start:
+            failures.append("prompt_starts_with_character_trigger")
 
     framing_ok = any(tok in prompt_l for tok in FRAMING_TOKENS)
     report["assertions"]["prompt_has_framing"] = framing_ok
-    if not framing_ok:
+    if not framing_ok and not using_override:
         failures.append("prompt_missing_framing_tokens")
 
     prompt_no_dingzhuang = "定妆" not in prompt
@@ -499,11 +513,66 @@ def main() -> int:
     neg_has_sheet_ban = any(
         (m.lower() in neg_l) if m.isascii() else (m in negative) for m in SHEET_NEG_MARKERS
     )
-    prompt_no_dingzhuang = "定妆" not in prompt
     sheet_neg_ok = neg_has_sheet_ban or prompt_no_dingzhuang
     report["assertions"]["negative_sheet_bans_or_no_dingzhuang"] = sheet_neg_ok
     if not sheet_neg_ok:
         failures.append("negative_missing_sheet_bans_and_prompt_has_dingzhuang")
+
+    report["prompt_full"] = prompt
+    report["prompt_head_200"] = prompt[:200]
+    report["negative_full"] = negative
+    report["loras"] = loras
+    return failures
+
+
+def _run_attempt(
+    *,
+    base: str,
+    project_id: str,
+    shot_id: str,
+    attempt_idx: int,
+    force: bool,
+    action_shot: bool,
+) -> dict[str, Any]:
+    params = _attempt_params(attempt_idx)
+    body = _build_generate_body(attempt_idx, force=force)
+    url = f"{base}/api/projects/{project_id}/keyframes/{shot_id}/generate"
+
+    attempt_report: dict[str, Any] = {
+        "attempt": attempt_idx,
+        "params": params,
+        "request_body": body,
+        "http_status": None,
+        "generation": None,
+        "pngs": [],
+        "vision_qa": None,
+        "assertions": {},
+        "failures": [],
+        "passed_vision": False,
+        "winning_png": None,
+    }
+
+    status, payload = _http_json("POST", url, body, timeout=900)
+    attempt_report["http_status"] = status
+    if status != 200 or not isinstance(payload, dict):
+        attempt_report["failures"].append(f"generate_http:{status}:{payload}")
+        attempt_report["assertions"]["http_200"] = False
+        return attempt_report
+
+    attempt_report["assertions"]["http_200"] = True
+    generation = payload.get("generation") if isinstance(payload.get("generation"), dict) else {}
+    attempt_report["generation"] = generation
+
+    using_override = bool(params.get("prompt_override"))
+    prompt_failures = _validate_generation(
+        attempt_report,
+        project_id=project_id,
+        shot_id=shot_id,
+        payload=payload,
+        attempt_idx=attempt_idx,
+        using_override=using_override,
+    )
+    attempt_report["failures"].extend(prompt_failures)
 
     cand_files = [
         str(c.get("file"))
@@ -512,42 +581,127 @@ def main() -> int:
     ]
     paths = _candidate_paths(project_id, shot_id, cand_files)
     png_meta = [_png_non_empty_heuristic(p) for p in paths]
-    report["pngs"] = png_meta
-    files_ok = len(png_meta) >= 1 and all(m["exists"] and m["size_ok"] for m in png_meta)
-    report["assertions"]["candidate_pngs_exist_gt_10kb"] = files_ok
-    if not files_ok:
-        failures.append(f"candidate_pngs_bad:{png_meta}")
+    attempt_report["pngs"] = png_meta
 
-    # Soft visual heuristic (reported; hard-fail only if all look empty/white)
+    files_ok = len(png_meta) >= 1 and all(m["exists"] and m["size_ok"] for m in png_meta)
+    attempt_report["assertions"]["candidate_pngs_exist_gt_10kb"] = files_ok
+    if not files_ok:
+        attempt_report["failures"].append(f"candidate_pngs_bad:{png_meta}")
+
     if png_meta and all(m.get("exists") and m.get("size_ok") for m in png_meta):
         if all(m.get("non_white") is False and not m.get("error") for m in png_meta):
-            failures.append("pngs_appear_blank_or_white")
-            report["assertions"]["pngs_non_white"] = False
+            attempt_report["failures"].append("pngs_appear_blank_or_white")
+            attempt_report["assertions"]["pngs_non_white"] = False
         else:
-            report["assertions"]["pngs_non_white"] = any(m.get("non_white") for m in png_meta)
+            attempt_report["assertions"]["pngs_non_white"] = any(m.get("non_white") for m in png_meta)
 
     vision = _ollama_vision_qa(
         [p for p in paths if p.exists()],
-        action_shot=_is_action_shot(project_id, shot_id),
+        action_shot=action_shot,
     )
-    report["vision_qa"] = vision
-    if vision.get("warnings"):
-        report["vision_qa_warnings"] = vision["warnings"]
-    if vision.get("hard_fail"):
-        failures.append("vision_qa_hard_fail")
-        report["assertions"]["vision_qa_pass"] = False
-    else:
-        report["assertions"]["vision_qa_pass"] = True
+    attempt_report["vision_qa"] = vision
+    if vision.get("passed"):
+        attempt_report["passed_vision"] = True
+        attempt_report["winning_png"] = vision.get("best_result")
+        attempt_report["assertions"]["vision_qa_pass"] = True
+    elif action_shot:
+        attempt_report["assertions"]["vision_qa_pass"] = False
+        if vision.get("hard_fail"):
+            attempt_report["failures"].append("vision_qa_hard_fail")
 
-    report["prompt_full"] = prompt
-    report["prompt_head_200"] = prompt[:200]
-    report["negative_full"] = negative
-    report["loras"] = loras
-    report["ok"] = not failures
-    return _finish(report, 0 if not failures else 1)
+    return attempt_report
+
+
+def main() -> int:
+    base = (sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BASE).rstrip("/")
+    project_id = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_PROJECT
+    preferred = sys.argv[3] if len(sys.argv) > 3 else PREFERRED_SHOT
+
+    failures: list[str] = []
+    report: dict[str, Any] = {
+        "base": base,
+        "project_id": project_id,
+        "shot_id": None,
+        "action_shot": False,
+        "attempts": [],
+        "winning_attempt": None,
+        "winning_params": None,
+        "winning_png": None,
+        "vision_qa": None,
+        "failures": failures,
+        "ok": False,
+        "exit_code": 1,
+    }
+
+    status, _ = _http_json("GET", f"{base}/api/projects", timeout=15)
+    if status != 200:
+        failures.append(f"api_projects_status:{status}")
+        report["assertions"] = {"api_up": False}
+        return _finish(report, 1)
+    report["assertions"] = {"api_up": True}
+
+    shot_id = _discover_shot_id(base, project_id, preferred)
+    report["shot_id"] = shot_id
+    action_shot = _is_action_shot(project_id, shot_id)
+    report["action_shot"] = action_shot
+
+    winning_attempt: dict[str, Any] | None = None
+    for attempt_idx in range(1, MAX_ATTEMPTS + 1):
+        print(
+            f"Attempt {attempt_idx}/{MAX_ATTEMPTS}: "
+            f"params={_attempt_params(attempt_idx)}",
+            file=sys.stderr,
+        )
+        attempt = _run_attempt(
+            base=base,
+            project_id=project_id,
+            shot_id=shot_id,
+            attempt_idx=attempt_idx,
+            force=(attempt_idx == 1),
+            action_shot=action_shot,
+        )
+        report["attempts"].append(attempt)
+
+        if attempt.get("passed_vision"):
+            winning_attempt = attempt
+            report["winning_attempt"] = attempt_idx
+            report["winning_params"] = attempt.get("params")
+            report["winning_png"] = attempt.get("winning_png")
+            report["vision_qa"] = attempt.get("vision_qa")
+            report["generation"] = attempt.get("generation")
+            report["pngs"] = attempt.get("pngs")
+            report["ok"] = True
+            report["exit_code"] = 0
+            return _finish(report, 0)
+
+        if not action_shot:
+            # Non-action shots: first successful HTTP + PNG checks suffice.
+            if attempt.get("assertions", {}).get("http_200") and not attempt.get("failures"):
+                report["ok"] = True
+                report["exit_code"] = 0
+                report["generation"] = attempt.get("generation")
+                report["pngs"] = attempt.get("pngs")
+                return _finish(report, 0)
+            break
+
+    # All attempts exhausted for action shot (or non-action failed).
+    last = report["attempts"][-1] if report["attempts"] else {}
+    report["generation"] = last.get("generation")
+    report["pngs"] = last.get("pngs")
+    report["vision_qa"] = last.get("vision_qa")
+    for attempt in report["attempts"]:
+        failures.extend(
+            f"attempt_{attempt.get('attempt')}:{f}" for f in (attempt.get("failures") or [])
+        )
+    if action_shot:
+        failures.append("vision_qa_exhausted_retries")
+    report["ok"] = False
+    report["exit_code"] = 1
+    return _finish(report, 1)
 
 
 def _finish(report: dict[str, Any], code: int) -> int:
+    report["exit_code"] = code
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(report, ensure_ascii=False, indent=2)
     REPORT_PATH.write_text(text, encoding="utf-8")

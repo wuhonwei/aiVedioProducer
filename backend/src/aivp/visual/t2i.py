@@ -322,34 +322,35 @@ def generate_shot_with_loras(
         if look and look not in " ".join(char_trigger_bits + char_look_bits):
             char_look_bits.append(look)
         if profile.get("lora_ready"):
-            c_lora = _lora_basename(profile, vpaths, cid)
-            if c_lora:
-                c_lora = _stage_if_comfy(
-                    backend,
-                    vpaths.lora_dir(cid),
-                    c_lora,
-                    settings=settings,
+            if character_lora_strength is not None:
+                strength = float(character_lora_strength)
+            else:
+                strength = float(
+                    profile.get("lora_weight_default") or DEFAULT_LORA_WEIGHT
                 )
-                if character_lora_strength is not None:
-                    strength = float(character_lora_strength)
-                else:
-                    strength = float(
-                        profile.get("lora_weight_default") or DEFAULT_LORA_WEIGHT
+                # Keyframes use minimal look; slightly lower LoRA so scene/env wins.
+                if character_look == "minimal":
+                    cap = (
+                        max_character_lora_strength
+                        if max_character_lora_strength is not None
+                        else 0.65
                     )
-                    # Keyframes use minimal look; slightly lower LoRA so scene/env wins.
-                    if character_look == "minimal":
-                        cap = (
-                            max_character_lora_strength
-                            if max_character_lora_strength is not None
-                            else 0.65
-                        )
-                        strength = max(0.45, min(strength, cap))
-                loras.append(
-                    {
-                        "name": c_lora,
-                        "strength": strength,
-                    }
-                )
+                    strength = max(0.45, min(strength, cap))
+            if strength > 0:
+                c_lora = _lora_basename(profile, vpaths, cid)
+                if c_lora:
+                    c_lora = _stage_if_comfy(
+                        backend,
+                        vpaths.lora_dir(cid),
+                        c_lora,
+                        settings=settings,
+                    )
+                    loras.append(
+                        {
+                            "name": c_lora,
+                            "strength": strength,
+                        }
+                    )
 
     user_prompt = (prompt or "").strip()
     prompt_bits: list[str] = []

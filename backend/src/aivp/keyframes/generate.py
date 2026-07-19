@@ -469,6 +469,7 @@ def generate_keyframes(
     force: bool = False,
     prompt_override: str = "",
     negative_override: str = "",
+    character_lora_strength: float | None = None,
     settings=None,
 ) -> dict[str, Any]:
     shot = _load_shot(project_paths, shot_id)
@@ -501,11 +502,11 @@ def generate_keyframes(
     final_prompt = prompt
     attack_scene = _is_attack_action_scene(shot)
     multi_cast = len(stacked_character_ids) >= 2
-    char_lora_strength: float | None = None
+    char_lora_strength: float | None = character_lora_strength
     max_char_lora: float | None = None
-    if attack_scene and multi_cast:
+    if char_lora_strength is None and attack_scene and multi_cast:
         char_lora_strength = 0.35
-    elif multi_cast:
+    elif char_lora_strength is None and multi_cast:
         max_char_lora = 0.45
     for _ in range(count):
         out = generate_shot_with_loras(
@@ -557,6 +558,7 @@ def generate_keyframes(
         "candidate_count": len(candidates),
         "warnings": warnings,
         "prompt_order": "scene_first",
+        "character_lora_strength": char_lora_strength,
     }
     _write_json(kpaths.generation_json(shot_id), generation)
 
