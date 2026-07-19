@@ -278,6 +278,7 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
 
   const reloadKeyframes = async (shotId: string) => {
     const data = await getKeyframes(projectId, shotId);
+    if (selectedIdRef.current !== shotId) return;
     applyKeyframeData(data);
   };
 
