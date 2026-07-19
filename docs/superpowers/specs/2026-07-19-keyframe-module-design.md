@@ -1,7 +1,7 @@
 # Keyframe Module (Phase 1)
 
 **Date:** 2026-07-19  
-**Status:** Approved for implementation  
+**Status:** Implemented  
 **Baseline:** `0bb6709`  
 **Depends on:** `2026-07-19-optional-location-lora-shot-t2i-design.md`, character/location LoRA visual stack  
 **Roadmap:** Sub-project 1 of the 2026-07-19 next-stage TODO (C). Later phases (LoRA recovery, VisualPage split, LoRA weight policy, QA tags, train templates, I2V, timeline) are **out of scope** here.
