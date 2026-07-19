@@ -148,9 +148,11 @@ def generate_keyframes(
         use_location_lora=use_location_lora,
     )
 
+    count = min(8, max(1, int(count)))
+
     candidates: list[dict[str, str]] = []
     last_out: dict[str, Any] | None = None
-    for _ in range(max(1, count)):
+    for _ in range(count):
         out = generate_shot_with_loras(
             vpaths,
             backend,

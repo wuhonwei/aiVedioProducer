@@ -15,7 +15,8 @@ from aivp.keyframes.store import (
 from aivp.paths import ProjectPaths
 from aivp.visual.image_backend import StubImageBackend
 from aivp.visual.paths import VisualPaths
-from aivp.visual.profiles import ensure_profile
+from aivp.visual.location_profiles import ensure_location_profile, save_location_profile
+from aivp.visual.profiles import ensure_profile, read_profile_json, save_profile
 
 
 def test_keyframe_paths_ensure(tmp_path: Path):
@@ -87,6 +88,31 @@ def _seed_shot_project(tmp_path: Path) -> tuple[ProjectPaths, VisualPaths, Keyfr
     return paths, v, k
 
 
+def _mark_character_lora_ready(v: VisualPaths, character_id: str) -> None:
+    v.ensure_character(character_id)
+    profile = read_profile_json(v.profile_json(character_id)) or {"character_id": character_id}
+    profile["lora_ready"] = True
+    lora_dir = v.lora_dir(character_id)
+    lora_dir.mkdir(parents=True, exist_ok=True)
+    lora_file = lora_dir / "model.safetensors"
+    lora_file.write_bytes(b"lora")
+    profile["lora_file"] = lora_file.name
+    save_profile(v, profile)
+
+
+def _mark_location_lora_ready(v: VisualPaths, location_id: str) -> None:
+    v.ensure_location(location_id)
+    profile_path = v.location_profile_json(location_id)
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["lora_ready"] = True
+    lora_dir = v.location_lora_dir(location_id)
+    lora_dir.mkdir(parents=True, exist_ok=True)
+    lora_file = lora_dir / "model.safetensors"
+    lora_file.write_bytes(b"lora")
+    profile["lora_file"] = lora_file.name
+    save_location_profile(v, profile)
+
+
 def test_generate_keyframes_writes_candidates(tmp_path: Path):
     paths, v, k = _seed_shot_project(tmp_path)
     out = generate_keyframes(
@@ -106,4 +132,115 @@ def test_generate_keyframes_warns_when_lora_missing(tmp_path: Path):
     out = generate_keyframes(
         paths, v, k, StubImageBackend(), "shot_000001", count=1
     )
+    assert out["status"] == "succeeded"
+    assert len(out["candidates"]) == 1
+    assert len(list_candidates(k, "shot_000001")) == 1
     assert any("lora" in w.lower() or "not_ready" in w for w in out["warnings"])
+
+
+def test_generate_keyframes_force_clears_existing(tmp_path: Path):
+    paths, v, k = _seed_shot_project(tmp_path)
+    generate_keyframes(paths, v, k, StubImageBackend(), "shot_000001", count=2)
+    assert len(list_candidates(k, "shot_000001")) == 2
+    select_keyframe(k, "shot_000001", "kf_0001.png")
+    assert k.selected_json("shot_000001").exists()
+
+    out = generate_keyframes(
+        paths,
+        v,
+        k,
+        StubImageBackend(),
+        "shot_000001",
+        count=1,
+        force=True,
+    )
+    assert out["status"] == "succeeded"
+    assert len(out["candidates"]) == 1
+    files = {c["file"] for c in list_candidates(k, "shot_000001")}
+    assert files == {"kf_0001.png"}
+    assert not k.selected_json("shot_000001").exists()
+
+
+def test_generate_keyframes_warns_too_many_loras(tmp_path: Path):
+    paths = ProjectPaths(tmp_path, "p1")
+    paths.ensure()
+    v = VisualPaths(tmp_path, "p1")
+    v.ensure()
+    k = KeyframePaths(tmp_path, "p1")
+    k.ensure()
+    char_ids: list[str] = []
+    for i in range(1, 5):
+        cid = f"ent_{i}"
+        char_ids.append(cid)
+        ensure_profile(v, {"id": cid, "name": f"角色{i}", "prompt_zh": "测试"})
+        _mark_character_lora_ready(v, cid)
+    doc = {
+        "schema_version": 2,
+        "shots": [
+            {
+                "shot_id": "shot_000001",
+                "visual_prompt": "群像镜头",
+                "negative_prompt": "lowres",
+                "asset_refs": {"characters": char_ids, "locations": [], "props": []},
+                "generation": {},
+            }
+        ],
+    }
+    paths.shot_script_json.write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+    )
+
+    out = generate_keyframes(
+        paths, v, k, StubImageBackend(), "shot_000001", count=1
+    )
+    assert out["status"] == "succeeded"
+    assert "too_many_loras" in out["warnings"]
+
+
+def test_generate_keyframes_warns_too_many_loras_with_location(tmp_path: Path):
+    paths = ProjectPaths(tmp_path, "p1")
+    paths.ensure()
+    v = VisualPaths(tmp_path, "p1")
+    v.ensure()
+    k = KeyframePaths(tmp_path, "p1")
+    k.ensure()
+    loc_id = "loc_1"
+    ensure_location_profile(v, {"id": loc_id, "name": "渡口", "prompt_zh": "古渡"})
+    _mark_location_lora_ready(v, loc_id)
+    char_ids: list[str] = []
+    for i in range(1, 4):
+        cid = f"ent_{i}"
+        char_ids.append(cid)
+        ensure_profile(v, {"id": cid, "name": f"角色{i}", "prompt_zh": "测试"})
+        _mark_character_lora_ready(v, cid)
+    doc = {
+        "schema_version": 2,
+        "shots": [
+            {
+                "shot_id": "shot_000001",
+                "visual_prompt": "渡口群像",
+                "negative_prompt": "lowres",
+                "asset_refs": {
+                    "characters": char_ids,
+                    "locations": [loc_id],
+                    "props": [],
+                },
+                "generation": {},
+            }
+        ],
+    }
+    paths.shot_script_json.write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+    )
+
+    out = generate_keyframes(
+        paths,
+        v,
+        k,
+        StubImageBackend(),
+        "shot_000001",
+        count=1,
+        use_location_lora=True,
+    )
+    assert out["status"] == "succeeded"
+    assert "too_many_loras" in out["warnings"]
