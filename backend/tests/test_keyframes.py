@@ -287,14 +287,89 @@ def test_resolve_shot_asset_ids_maps_display_names():
             "locations": ["青渡川"],
         }
     }
-    name_to_id = {
+    character_name_to_id = {
         "林砚之": "ent_0001",
         "陈守义": "ent_0002",
+    }
+    location_name_to_id = {
         "青渡川": "loc_1",
     }
-    cids, lid = _resolve_shot_asset_ids(shot, name_to_id)
+    cids, lid = _resolve_shot_asset_ids(
+        shot, character_name_to_id, location_name_to_id
+    )
     assert cids == ["ent_0001", "ent_0002"]
     assert lid == "loc_1"
+
+
+def test_resolve_shot_asset_ids_location_wins_on_shared_prefix():
+    shot = {
+        "location": "青川渡码头",
+        "asset_refs": {"characters": [], "locations": ["青川渡码头"]},
+    }
+    character_name_to_id = {"青川渡": "ent_0001", "林砚之": "ent_0002"}
+    location_name_to_id = {"青川渡": "loc_qingchuan"}
+    cids, lid = _resolve_shot_asset_ids(
+        shot, character_name_to_id, location_name_to_id
+    )
+    assert cids == []
+    assert lid == "loc_qingchuan"
+
+
+def test_generate_keyframes_resolves_location_not_character_on_collision(tmp_path: Path):
+    paths = ProjectPaths(tmp_path, "p1")
+    paths.ensure()
+    v = VisualPaths(tmp_path, "p1")
+    v.ensure()
+    k = KeyframePaths(tmp_path, "p1")
+    k.ensure()
+    paths.assets_json.parent.mkdir(parents=True, exist_ok=True)
+    paths.assets_json.write_text(
+        json.dumps(
+            {
+                "characters": [
+                    {
+                        "id": "ent_0001",
+                        "name": "青川渡",
+                        "canonical_name": "青川渡",
+                    }
+                ],
+                "locations": [
+                    {
+                        "id": "loc_qingchuan",
+                        "name": "青川渡",
+                        "canonical_name": "青川渡",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    doc = {
+        "schema_version": 2,
+        "shots": [
+            {
+                "shot_id": "shot_000001",
+                "visual_prompt": "青川渡码头远景",
+                "negative_prompt": "lowres",
+                "asset_refs": {
+                    "characters": [],
+                    "locations": ["青川渡码头"],
+                    "props": [],
+                },
+                "generation": {},
+            }
+        ],
+    }
+    paths.shot_script_json.write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+    )
+
+    out = generate_keyframes(paths, v, k, StubImageBackend(), "shot_000001", count=1)
+    gen = read_generation(k, "shot_000001")
+    assert out["status"] == "succeeded"
+    assert gen["location_id"] == "loc_qingchuan"
+    assert gen["location_id"] != "ent_0001"
 
 
 def test_generate_keyframes_resolves_display_names_to_ids(tmp_path: Path):

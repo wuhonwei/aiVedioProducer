@@ -228,12 +228,20 @@ def upgrade_shot_to_v2(
     return out
 
 
-def build_name_to_id_map(assets: dict | None = None, entities: dict | None = None) -> dict[str, str]:
+_DEFAULT_NAME_MAP_KINDS = ("characters", "locations", "props", "factions")
+
+
+def build_name_to_id_map(
+    assets: dict | None = None,
+    entities: dict | None = None,
+    *,
+    kinds: tuple[str, ...] = _DEFAULT_NAME_MAP_KINDS,
+) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for source in (assets, entities):
         if not isinstance(source, dict):
             continue
-        for kind in ("characters", "locations", "props", "factions"):
+        for kind in kinds:
             for item in source.get(kind) or []:
                 if not isinstance(item, dict):
                     continue
