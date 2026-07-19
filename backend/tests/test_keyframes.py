@@ -5,7 +5,12 @@ from fastapi.testclient import TestClient
 
 from aivp.api.app import create_app
 from aivp.config import Settings
-from aivp.keyframes.generate import _resolve_shot_asset_ids, generate_keyframes
+from aivp.keyframes.generate import (
+    _build_keyframe_prompt,
+    _resolve_name_to_id,
+    _resolve_shot_asset_ids,
+    generate_keyframes,
+)
 from aivp.keyframes.paths import KeyframePaths
 from aivp.keyframes.store import (
     delete_candidate,
@@ -364,6 +369,77 @@ def test_generate_keyframes_resolves_cast_names_when_asset_refs_empty(tmp_path: 
     gen = read_generation(k, "shot_000001")
     assert gen and gen["character_ids"] == ["ent_1"]
     assert "character_lora_not_ready:ent_1" not in out["warnings"]
+
+
+def test_build_keyframe_prompt_includes_camera_framing():
+    shot = {
+        "visual_prompt": "林砚之立于渡口，国风动画角色定妆",
+        "shot_type": "medium_wide",
+        "camera": {
+            "shot_size": "medium_wide",
+            "angle": "eye level",
+            "movement": "static",
+            "lens": "35mm",
+            "composition": "rule of thirds",
+        },
+    }
+    prompt = _build_keyframe_prompt(shot)
+    assert "国风动画角色定妆" not in prompt
+    assert "medium" in prompt.lower()
+    assert "cinematic" in prompt.lower()
+    assert "林砚之立于渡口" in prompt
+
+
+def test_resolve_name_to_id_prefix():
+    name_to_id = {"青川渡": "loc_qingchuan", "林砚之": "ent_0001"}
+    assert _resolve_name_to_id("青川渡码头", name_to_id) == "loc_qingchuan"
+    assert _resolve_name_to_id("林砚之", name_to_id) == "ent_0001"
+    assert _resolve_name_to_id("未知地点", name_to_id) is None
+
+
+def test_generate_keyframes_uses_minimal_character_look(tmp_path: Path):
+    paths = ProjectPaths(tmp_path, "p1")
+    paths.ensure()
+    v = VisualPaths(tmp_path, "p1")
+    v.ensure()
+    k = KeyframePaths(tmp_path, "p1")
+    k.ensure()
+    ch = {
+        "id": "ent_1",
+        "name": "林",
+        "tier": "major",
+        "prompt_zh": "青衣少年，国风动画角色定妆",
+        "appearance": {"hair": "束发青巾"},
+        "wardrobe": {"default": "青衫长袍"},
+    }
+    ensure_profile(v, ch)
+    _mark_character_lora_ready(v, "ent_1")
+    doc = {
+        "schema_version": 2,
+        "shots": [
+            {
+                "shot_id": "shot_000001",
+                "visual_prompt": "立于渡口远眺",
+                "negative_prompt": "lowres",
+                "cast": ["林"],
+                "shot_type": "medium",
+                "camera": {"shot_size": "medium", "angle": "eye level"},
+                "asset_refs": {"characters": ["ent_1"], "locations": [], "props": []},
+                "generation": {},
+            }
+        ],
+    }
+    paths.shot_script_json.write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+    )
+
+    out = generate_keyframes(paths, v, k, StubImageBackend(), "shot_000001", count=1)
+    gen = read_generation(k, "shot_000001")
+    assert out["status"] == "succeeded"
+    assert gen["character_ids"] == ["ent_1"]
+    assert "国风动画角色定妆" not in gen["prompt"]
+    assert "cinematic" in gen["prompt"].lower()
+    assert "medium" in gen["prompt"].lower()
 
 
 def test_keyframes_api_generate_get_select(tmp_path: Path):

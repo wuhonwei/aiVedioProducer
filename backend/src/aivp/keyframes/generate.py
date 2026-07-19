@@ -20,6 +20,128 @@ from aivp.visual.t2i import generate_shot_with_loras
 _MAX_LORAS = 3
 _DEFAULT_NEGATIVE = "lowres, blurry, bad anatomy, watermark, text"
 
+_SHEET_ZH_MARKERS = (
+    "国风动画角色定妆",
+    "角色定妆",
+    "定妆照",
+    "三视图",
+    "turnaround",
+    "character sheet",
+    "model sheet",
+    "reference sheet",
+)
+
+_SHOT_SIZE_FRAMING: dict[str, str] = {
+    "establishing": "wide shot, establishing shot, full environment visible, cinematic composition",
+    "wide": "wide shot, full body visible, environment in frame, cinematic anime still",
+    "full": "full body shot, head to toe in frame, cinematic anime still",
+    "medium": "medium shot, half body, waist up, cinematic anime still",
+    "medium_wide": "medium wide shot, full body visible, environment in frame, cinematic anime still",
+    "medium_close": "medium close-up, chest up, cinematic anime still",
+    "close": "close-up, face and shoulders, cinematic anime still",
+    "insert": "insert shot, detail focus, cinematic anime still",
+    "over_shoulder": "over-the-shoulder shot, cinematic anime still",
+}
+
+_KEYFRAME_SHEET_NEGATIVE = (
+    "character sheet, turnaround sheet, model sheet, reference sheet, "
+    "multiple views, plain white background, studio lighting, "
+    "A-pose, orthographic character reference, 定妆, 三视图, 角色设定图"
+)
+
+
+def _strip_sheet_language(text: str) -> str:
+    out = (text or "").strip()
+    for marker in _SHEET_ZH_MARKERS:
+        out = out.replace(marker, "")
+    while "；；" in out:
+        out = out.replace("；；", "；")
+    return out.strip("；，, ").strip()
+
+
+def _shot_framing_tokens(shot: dict[str, Any]) -> str:
+    shot_type = str(shot.get("shot_type") or "").strip().lower()
+    camera = shot.get("camera") if isinstance(shot.get("camera"), dict) else {}
+    size = str(camera.get("shot_size") or shot_type or "medium").strip().lower()
+    framing = (
+        _SHOT_SIZE_FRAMING.get(size)
+        or _SHOT_SIZE_FRAMING.get(shot_type)
+        or _SHOT_SIZE_FRAMING["medium"]
+    )
+    angle = str(camera.get("angle") or "eye level").strip()
+    movement = str(camera.get("movement") or "static").strip()
+    lens = str(camera.get("lens") or "").strip()
+    composition = str(camera.get("composition") or "").strip()
+    notes = str(camera.get("notes") or "").strip() if isinstance(camera.get("notes"), str) else ""
+    bits = [
+        framing,
+        f"{angle} angle" if angle else "",
+        f"{movement} camera" if movement and movement != "static" else "",
+        lens,
+        composition,
+        notes,
+        "cinematic still from anime film",
+        "in-scene environment",
+        "NOT character sheet, NOT turnaround sheet, NOT 定妆, NOT model sheet",
+    ]
+    return ", ".join(b for b in bits if b)
+
+
+def _build_keyframe_prompt(shot: dict[str, Any], *, override: str = "") -> str:
+    if override.strip():
+        return _strip_sheet_language(override)
+
+    visual = _strip_sheet_language(str(shot.get("visual_prompt") or ""))
+    action = str(shot.get("action") or "").strip()
+    if action and action == visual:
+        action = ""
+
+    scene_bits = [visual]
+    if action and action not in visual:
+        scene_bits.append(action)
+
+    framing = _shot_framing_tokens(shot)
+    return ", ".join(b for b in scene_bits + [framing] if b)
+
+
+def _shot_has_characters(shot: dict[str, Any]) -> bool:
+    asset_refs = shot.get("asset_refs") if isinstance(shot.get("asset_refs"), dict) else {}
+    if asset_refs.get("characters"):
+        return True
+    if shot.get("cast") or shot.get("characters"):
+        return True
+    assets_required = (
+        shot.get("assets_required") if isinstance(shot.get("assets_required"), dict) else {}
+    )
+    return bool(assets_required.get("characters"))
+
+
+def _build_keyframe_negative(shot: dict[str, Any], override: str = "") -> str:
+    base = (override or shot.get("negative_prompt") or _DEFAULT_NEGATIVE).strip()
+    parts = [base, _KEYFRAME_SHEET_NEGATIVE]
+    if _shot_has_characters(shot):
+        parts.append("empty scene, no humans, deserted")
+    return ", ".join(parts)
+
+
+def _resolve_name_to_id(name: str, name_to_id: dict[str, str]) -> str | None:
+    key = str(name).strip()
+    if not key:
+        return None
+    if key in name_to_id:
+        return name_to_id[key]
+    candidates = [
+        (n, entity_id) for n, entity_id in name_to_id.items() if key.startswith(n) and len(n) >= 2
+    ]
+    if len(candidates) == 1:
+        return candidates[0][1]
+    rev = [
+        (n, entity_id) for n, entity_id in name_to_id.items() if n.startswith(key) and len(key) >= 2
+    ]
+    if len(rev) == 1:
+        return rev[0][1]
+    return None
+
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,14 +200,16 @@ def _resolve_shot_asset_ids(
             key = str(name).strip()
             if not key:
                 continue
-            character_ids.append(name_to_id.get(key) or key)
+            character_ids.append(_resolve_name_to_id(key, name_to_id) or key)
     else:
-        character_ids = [name_to_id.get(key) or key for key in character_ids]
+        character_ids = [
+            _resolve_name_to_id(key, name_to_id) or key for key in character_ids
+        ]
 
     character_ids = _dedupe_preserve_order(character_ids)
 
     if location_id:
-        location_id = name_to_id.get(location_id) or location_id
+        location_id = _resolve_name_to_id(location_id, name_to_id) or location_id
     elif not location_id:
         location_id = str(shot.get("location_id") or "").strip() or None
     if not location_id:
@@ -97,7 +221,7 @@ def _resolve_shot_asset_ids(
             key = str(name).strip()
             if not key:
                 continue
-            location_id = name_to_id.get(key) or key
+            location_id = _resolve_name_to_id(key, name_to_id) or key
             break
 
     return character_ids, location_id
@@ -203,12 +327,10 @@ def generate_keyframes(
     name_to_id = _load_name_to_id_map(project_paths)
     character_ids, location_id = _resolve_shot_asset_ids(shot, name_to_id)
 
-    prompt = (prompt_override or shot.get("visual_prompt") or "").strip()
+    prompt = _build_keyframe_prompt(shot, override=prompt_override)
     if not prompt:
         raise ValueError("prompt_required")
-    negative = (
-        (negative_override or shot.get("negative_prompt") or _DEFAULT_NEGATIVE).strip()
-    )
+    negative = _build_keyframe_negative(shot, override=negative_override)
 
     kpaths.ensure_shot(shot_id)
     if force:
@@ -235,6 +357,7 @@ def generate_keyframes(
             negative=negative,
             shot_id=shot_id,
             use_location_lora=use_location_lora,
+            character_look="minimal",
             settings=settings,
         )
         last_out = out
@@ -248,7 +371,7 @@ def generate_keyframes(
         sidecar = {
             "file": filename,
             "shot_id": shot_id,
-            "prompt": out.get("prompt") or prompt,
+            "prompt": prompt,
             "negative": negative,
             "loras": out.get("loras") or [],
             "created_at": created_at,

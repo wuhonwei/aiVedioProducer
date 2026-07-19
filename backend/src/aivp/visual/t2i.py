@@ -26,6 +26,35 @@ _LEGACY_PROBE_MARKERS = (
     "upper body portrait",
 )
 
+_SHEET_LOOK_MARKERS = (
+    "国风动画角色定妆",
+    "角色定妆",
+    "定妆照",
+    "character sheet",
+    "turnaround",
+)
+
+
+def _strip_sheet_look_markers(text: str) -> str:
+    out = (text or "").strip()
+    for marker in _SHEET_LOOK_MARKERS:
+        out = out.replace(marker, "")
+    return out.strip("；，, ").strip()
+
+
+def _minimal_character_look(profile: dict) -> str:
+    """Wardrobe + hair only — avoid full prompt_zh sheet language in keyframes."""
+    appearance = profile.get("appearance") if isinstance(profile.get("appearance"), dict) else {}
+    wardrobe = profile.get("wardrobe") if isinstance(profile.get("wardrobe"), dict) else {}
+    parts: list[str] = []
+    hair = str(appearance.get("hair") or "").strip()
+    outfit = str(wardrobe.get("default") or "").strip()
+    if hair:
+        parts.append(hair)
+    if outfit:
+        parts.append(f"身着{outfit}")
+    return _strip_sheet_look_markers("，".join(parts))
+
 
 def _lora_basename(profile: dict, vpaths: VisualPaths, character_id: str) -> str | None:
     name = profile.get("lora_file")
@@ -240,6 +269,7 @@ def generate_shot_with_loras(
     shot_id: str | None = None,
     location_strength: float | None = None,
     use_location_lora: bool = False,
+    character_look: str = "full",
     settings=None,
 ) -> dict[str, Any]:
     """Txt2img with optional location LoRA first, then character LoRAs stacked."""
@@ -282,7 +312,10 @@ def generate_shot_with_loras(
         if trigger:
             char_triggers.append(trigger)
             prompt_bits.append(trigger)
-        look = str(profile.get("prompt_zh") or "").strip()
+        if character_look == "minimal":
+            look = _minimal_character_look(profile)
+        else:
+            look = str(profile.get("prompt_zh") or "").strip()
         if look and look not in " ".join(prompt_bits):
             prompt_bits.append(look)
         if profile.get("lora_ready"):
