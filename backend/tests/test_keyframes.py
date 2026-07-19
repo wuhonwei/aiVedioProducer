@@ -1,6 +1,10 @@
 from pathlib import Path
 import json
 
+from fastapi.testclient import TestClient
+
+from aivp.api.app import create_app
+from aivp.config import Settings
 from aivp.keyframes.generate import generate_keyframes
 from aivp.keyframes.paths import KeyframePaths
 from aivp.keyframes.store import (
@@ -17,6 +21,31 @@ from aivp.visual.image_backend import StubImageBackend
 from aivp.visual.paths import VisualPaths
 from aivp.visual.location_profiles import ensure_location_profile, save_location_profile
 from aivp.visual.profiles import ensure_profile, read_profile_json, save_profile
+
+
+def _seed_project_shots(tmp_path: Path, project_id: str) -> None:
+    paths = ProjectPaths(tmp_path, project_id)
+    paths.ensure()
+    v = VisualPaths(tmp_path, project_id)
+    v.ensure()
+    ch = {"id": "ent_1", "name": "林", "tier": "major", "prompt_zh": "青衣少年"}
+    ensure_profile(v, ch)
+    doc = {
+        "schema_version": 2,
+        "shots": [
+            {
+                "shot_id": "shot_000001",
+                "visual_prompt": "立于渡口远眺",
+                "negative_prompt": "lowres",
+                "cast": ["林"],
+                "asset_refs": {"characters": ["ent_1"], "locations": [], "props": []},
+                "generation": {},
+            }
+        ],
+    }
+    paths.shot_script_json.write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def test_keyframe_paths_ensure(tmp_path: Path):
@@ -244,3 +273,37 @@ def test_generate_keyframes_warns_too_many_loras_with_location(tmp_path: Path):
     )
     assert out["status"] == "succeeded"
     assert "too_many_loras" in out["warnings"]
+
+
+def test_keyframes_api_generate_get_select(tmp_path: Path):
+    app = create_app(
+        Settings(
+            data_root=tmp_path,
+            db_url=f"sqlite:///{tmp_path / 'kf.db'}",
+            image_backend="stub",
+        )
+    )
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"name": "kf"}).json()["id"]
+    _seed_project_shots(tmp_path, pid)
+    r = client.post(
+        f"/api/projects/{pid}/keyframes/shot_000001/generate",
+        json={"count": 2, "use_location_lora": False},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["candidates"]) == 2
+    g = client.get(f"/api/projects/{pid}/keyframes/shot_000001")
+    assert g.status_code == 200
+    assert g.json()["status"] in {"candidates", "empty"}
+    fname = body["candidates"][0]["file"]
+    s = client.post(
+        f"/api/projects/{pid}/keyframes/shot_000001/select",
+        json={"filename": fname, "note": "ok"},
+    )
+    assert s.status_code == 200
+    assert s.json()["selected_file"] == fname
+    file_r = client.get(
+        f"/api/projects/{pid}/keyframes/shot_000001/files/{fname}"
+    )
+    assert file_r.status_code == 200
