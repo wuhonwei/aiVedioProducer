@@ -1,7 +1,7 @@
 # Project Delete (Hard Delete)
 
 **Date:** 2026-07-19  
-**Status:** Approved for implementation  
+**Status:** Implemented  
 **Baseline:** current `master` (post keyframe Phase 1)  
 **Depends on:** existing `Project` model, `ProjectPaths`, `ProjectListPage`
 
