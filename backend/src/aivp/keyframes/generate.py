@@ -225,11 +225,14 @@ def _build_keyframe_prompt(shot: dict[str, Any], *, override: str = "") -> str:
 
     framing = _shot_framing_tokens(shot)
     parts = [b for b in scene_bits + [framing] if b]
-    if _shot_has_characters(shot):
+    if _shot_has_characters(shot) and not attack_scene:
         parts.append(_KEYFRAME_SCENE_LOCK)
     prompt = ", ".join(parts)
     if action:
-        prompt = f"画面必须表现：{action}, {prompt}, 画面必须表现：{action}"
+        if attack_scene:
+            prompt = f"{prompt}, must depict action: {action}"
+        else:
+            prompt = f"画面必须表现：{action}, {prompt}, 画面必须表现：{action}"
     return prompt
 
 
