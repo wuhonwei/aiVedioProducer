@@ -91,12 +91,33 @@ def normalize_look_fields(profile: dict) -> dict[str, Any]:
 
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Write JSON atomically so concurrent readers never see a partial file."""
+    """Write JSON atomically so concurrent readers never see a partial file.
+
+    On Windows, antivirus/indexers can briefly lock the destination and cause
+    WinError 32 on os.replace; retry a few times before failing.
+    """
+    import time
+
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    last_err: OSError | None = None
+    for attempt in range(8):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError as e:
+            last_err = e
+            # WinError 32 / 5: sharing / access denied while another handle is open.
+            if getattr(e, "winerror", None) not in (32, 5) and e.errno not in (
+                13,
+                11,
+            ):
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    assert last_err is not None
+    raise last_err
 
 
 def read_profile_json(path: Path) -> dict[str, Any] | None:

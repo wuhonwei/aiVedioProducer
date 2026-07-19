@@ -1221,6 +1221,13 @@ export function VisualPage({ projectId }: Props) {
                       type="button"
                       className="btn btn-primary"
                       disabled={busy || active.bootstrap_status === "description_needs_review"}
+                      title={
+                        busy
+                          ? "请等待当前任务结束（如统一微调 / 试生成）后再确认"
+                          : active.bootstrap_status === "description_needs_review"
+                            ? "外貌描述需先修订后再确认训练集"
+                            : "确认后清除「待确认」标记"
+                      }
                       onClick={() => void onConfirmBootstrap()}
                     >
                       确认训练集
@@ -1633,14 +1640,20 @@ export function VisualPage({ projectId }: Props) {
                     disabled={
                       busy ||
                       Boolean(active.lora_ready) ||
-                      !(
-                        active.train_status === "trained" ||
-                        active.probe_status === "pending"
-                      )
+                      active.train_status !== "trained"
+                    }
+                    title={
+                      busy
+                        ? "请等待当前操作结束"
+                        : active.lora_ready
+                          ? "已确认可用；若要重做请先点「退回重新训练」"
+                          : active.train_status !== "trained"
+                            ? `需先完成微调（当前 train=${active.train_status || "not_started"}）`
+                            : "确认后该角色 LoRA 可用于镜头关键帧"
                     }
                     onClick={() => void onApproveLora()}
                   >
-                    确认 LoRA 可用
+                    {active.lora_ready ? "已确认 LoRA 可用" : "确认 LoRA 可用"}
                   </button>
                   <button
                     type="button"
@@ -1651,6 +1664,11 @@ export function VisualPage({ projectId }: Props) {
                     退回重新训练
                   </button>
                 </div>
+                {active.lora_ready ? (
+                  <p className="muted" style={{ margin: 0 }}>
+                    该角色 LoRA 已确认可用，无需再点「确认」。若要重做验证，请先「退回重新训练」后再试生成。
+                  </p>
+                ) : null}
                 {probeResult && active && (
                   <div className="stack">
                     <div className="row">

@@ -358,28 +358,53 @@ def bootstrap_project(
             payload.setdefault("total", total)
             _emit(on_progress, **payload)
 
-        results.append(
-            bootstrap_character(
-                vpaths,
-                ch,
-                backend,
-                settings=settings,
-                vision=vision,
-                llm=llm,
-                entity=entity,
-                should_cancel=should_cancel,
-                on_progress=_char_progress,
+        try:
+            results.append(
+                bootstrap_character(
+                    vpaths,
+                    ch,
+                    backend,
+                    settings=settings,
+                    vision=vision,
+                    llm=llm,
+                    entity=entity,
+                    should_cancel=should_cancel,
+                    on_progress=_char_progress,
+                )
             )
-        )
-        _emit(
-            on_progress,
-            character_id=cid,
-            step="done",
-            message=f"完成 {ch.get('name') or cid}",
-            done=i,
-            total=total,
-        )
-    return {"characters": results, "count": len(results)}
+            _emit(
+                on_progress,
+                character_id=cid,
+                step="done",
+                message=f"完成 {ch.get('name') or cid}",
+                done=i,
+                total=total,
+            )
+        except Exception as e:  # noqa: BLE001 — keep batch going on one failure
+            err = str(e)
+            results.append(
+                {
+                    "character_id": cid,
+                    "name": ch.get("name"),
+                    "status": "failed",
+                    "error": err,
+                }
+            )
+            _emit(
+                on_progress,
+                character_id=cid,
+                step="failed",
+                message=f"失败 {ch.get('name') or cid}: {err}",
+                done=i,
+                total=total,
+            )
+    failed = [r for r in results if isinstance(r, dict) and r.get("status") == "failed"]
+    return {
+        "characters": results,
+        "count": len(results),
+        "failed_count": len(failed),
+        "failed": failed,
+    }
 
 
 def confirm_bootstrap(vpaths: VisualPaths, character_id: str) -> dict[str, Any]:
@@ -389,12 +414,16 @@ def confirm_bootstrap(vpaths: VisualPaths, character_id: str) -> dict[str, Any]:
     if not profile:
         raise FileNotFoundError(f"profile_missing:{character_id}")
     profile["bootstrap_status"] = "confirmed"
-    profile["train_status"] = "curated_ready"
+    # Do not downgrade characters that already packaged / trained / approved.
+    advanced = {"curated_ready", "package_ready", "trained", "training"}
+    current = str(profile.get("train_status") or "")
+    if current not in advanced and not profile.get("lora_ready"):
+        profile["train_status"] = "curated_ready"
     save_profile(vpaths, profile)
     return {
         "character_id": character_id,
         "bootstrap_status": "confirmed",
-        "train_status": "curated_ready",
+        "train_status": profile.get("train_status"),
     }
 
 

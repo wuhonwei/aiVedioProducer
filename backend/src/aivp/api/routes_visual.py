@@ -1113,8 +1113,18 @@ def start_visual_bootstrap(
                 character_ids=body.character_ids,
                 on_progress=on_progress,
             )
-            data["status"] = "succeeded"
-            data["progress_note"] = "待人工确认训练集"
+            failed_n = int((result or {}).get("failed_count") or 0)
+            if failed_n and failed_n >= int((result or {}).get("count") or 0):
+                data["status"] = "failed"
+                data["error"] = f"bootstrap_all_failed:{failed_n}"
+                data["progress_note"] = "全部角色初始化失败"
+            elif failed_n:
+                data["status"] = "succeeded"
+                data["error"] = f"partial_failed:{failed_n}"
+                data["progress_note"] = f"部分完成，失败 {failed_n} 人，请查看结果后重试失败角色"
+            else:
+                data["status"] = "succeeded"
+                data["progress_note"] = "待人工确认训练集"
             data["result"] = result
             _write_job(path, data)
         except Exception as e:  # noqa: BLE001

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from aivp.visual.paths import VisualPaths
@@ -42,3 +43,25 @@ def test_ensure_profile_recovers_from_corrupt_file(tmp_path: Path):
     assert profile["character_id"] == "ent_0001"
     assert profile["name"] == "林砚之"
     assert read_profile_json(path) is not None
+
+
+def test_atomic_write_json_retries_winerror32(tmp_path: Path, monkeypatch):
+    path = tmp_path / "p.json"
+    calls = {"n": 0}
+
+    real_replace = os.replace
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            err = OSError(13, "Permission denied")
+            err.winerror = 32  # type: ignore[attr-defined]
+            raise err
+        return real_replace(src, dst)
+
+    from aivp.visual import profiles as profiles_mod
+
+    monkeypatch.setattr(profiles_mod.os, "replace", flaky_replace)
+    atomic_write_json(path, {"ok": True})
+    assert path.exists()
+    assert calls["n"] == 3
