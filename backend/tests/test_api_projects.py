@@ -1,4 +1,7 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+
 from aivp.api.app import create_app
 from aivp.config import Settings
 from aivp.paths import ProjectPaths
@@ -28,3 +31,55 @@ def test_get_project_not_found(tmp_path):
     body = r.json()
     assert body["code"]
     assert body["message"]
+
+
+def test_delete_project_removes_db_and_disk(tmp_path: Path):
+    app = create_app(
+        Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path / 'del.db'}")
+    )
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"name": "待删"}).json()["id"]
+    paths = ProjectPaths(tmp_path, pid)
+    paths.ensure()
+    (paths.root / "marker.txt").write_text("x", encoding="utf-8")
+    assert paths.root.is_dir()
+
+    r = client.delete(f"/api/projects/{pid}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deleted"] is True
+    assert body["id"] == pid
+    assert client.get(f"/api/projects/{pid}").status_code == 404
+    assert all(p["id"] != pid for p in client.get("/api/projects").json())
+    assert not paths.root.exists()
+
+
+def test_delete_project_not_found(tmp_path: Path):
+    app = create_app(
+        Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path / 'del2.db'}")
+    )
+    client = TestClient(app)
+    r = client.delete("/api/projects/missingproject")
+    assert r.status_code == 404
+
+
+def test_delete_project_invalid_id(tmp_path: Path):
+    app = create_app(
+        Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path / 'del3.db'}")
+    )
+    client = TestClient(app)
+    for bad in ["../etc", "a/b", "a\\b", ""]:
+        # empty path may 404/405 depending on routing; skip "" if router never matches
+        if not bad:
+            continue
+        r = client.delete(f"/api/projects/{bad}")
+        assert r.status_code in (400, 404, 422), (bad, r.status_code, r.text)
+
+
+def test_delete_project_rejects_dotdot_id(tmp_path: Path):
+    app = create_app(
+        Settings(data_root=tmp_path, db_url=f"sqlite:///{tmp_path / 'del3.db'}")
+    )
+    client = TestClient(app)
+    r = client.delete("/api/projects/%2e%2e")  # ".."
+    assert r.status_code == 400

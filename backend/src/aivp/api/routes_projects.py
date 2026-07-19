@@ -1,3 +1,5 @@
+import logging
+import shutil
 import uuid
 from typing import Any
 
@@ -11,6 +13,7 @@ from aivp.models import Project
 from aivp.paths import ProjectPaths
 
 router = APIRouter(tags=["projects"])
+logger = logging.getLogger(__name__)
 
 
 class ProjectCreate(BaseModel):
@@ -19,6 +22,13 @@ class ProjectCreate(BaseModel):
 
 def _short_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def _validate_project_id(project_id: str) -> str:
+    s = (project_id or "").strip()
+    if not s or ".." in s or "/" in s or "\\" in s:
+        raise HTTPException(status_code=400, detail=f"invalid_project_id:{project_id!r}")
+    return s
 
 
 def _project_out(p: Project) -> dict[str, Any]:
@@ -57,6 +67,34 @@ def get_project(project_id: str, db: Session = Depends(get_db)) -> dict[str, Any
     if not project:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
     return _project_out(project)
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    pid = _validate_project_id(project_id)
+    project = db.get(Project, pid)
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project {pid} not found")
+    db.delete(project)
+    db.commit()
+
+    root = ProjectPaths(settings.data_root, pid).root
+    warning: str | None = None
+    if root.exists():
+        try:
+            shutil.rmtree(root)
+        except OSError as e:
+            logger.exception("project disk delete failed: %s", root)
+            warning = f"disk_delete_failed:{e}"
+
+    out: dict[str, Any] = {"deleted": True, "id": pid}
+    if warning:
+        out["warning"] = warning
+    return out
 
 
 @router.post("/projects/{project_id}/source")
