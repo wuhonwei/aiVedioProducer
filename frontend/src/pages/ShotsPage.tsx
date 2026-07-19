@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   exportShotsYaml,
+  generateKeyframes,
   getAssetPlan,
+  getKeyframes,
   getShots,
+  keyframeFileUrl,
   listVisualLocations,
   patchShot,
   regenerateAssetPlan,
+  rejectKeyframe,
   reviewShot,
-  visualFileUrl,
-  visualLocationFileUrl,
-  visualT2I,
+  selectKeyframe,
   type VisualLocation,
 } from "../api/client";
 
@@ -70,6 +72,35 @@ function reviewOf(shot: Shot): string {
   return shot.review_status || shot.review?.status || "needs_review";
 }
 
+type KfCandidate = {
+  file: string;
+  url?: string;
+  quality?: { status?: string };
+};
+
+type KfSelected = {
+  selected_file?: string;
+  url?: string;
+  note?: string;
+} | null;
+
+type Lightbox = { src: string; title: string } | null;
+
+function kfStatusLabel(status: string): string {
+  switch (status) {
+    case "empty":
+      return "未生成";
+    case "candidates":
+      return "已生成候选";
+    case "selected":
+      return "已选择";
+    case "rejected":
+      return "已退回";
+    default:
+      return status || "未生成";
+  }
+}
+
 export function ShotsPage({ projectId, onOpenAssets }: Props) {
   const [doc, setDoc] = useState<{
     shots?: Shot[];
@@ -89,7 +120,10 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   const [locations, setLocations] = useState<VisualLocation[]>([]);
   const [useLocationLora, setUseLocationLora] = useState(false);
   const [genBusy, setGenBusy] = useState(false);
-  const [genPreviewUrl, setGenPreviewUrl] = useState<string | null>(null);
+  const [kfStatus, setKfStatus] = useState("empty");
+  const [kfCandidates, setKfCandidates] = useState<KfCandidate[]>([]);
+  const [kfSelected, setKfSelected] = useState<KfSelected>(null);
+  const [lightbox, setLightbox] = useState<Lightbox>(null);
   const genTokenRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
@@ -190,16 +224,6 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
   const selected = shots.find((s) => s.shot_id === selectedId) || null;
   selectedIdRef.current = selectedId;
 
-  const characterNameToId = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const item of plan?.characters || []) {
-      const id = String(item.id ?? "").trim();
-      const name = String(item.name ?? "").trim();
-      if (id && name) map.set(name, id);
-    }
-    return map;
-  }, [plan]);
-
   const locationNameToId = useMemo(() => {
     const map = new Map<string, string>();
     for (const item of plan?.locations || []) {
@@ -209,13 +233,6 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
     }
     return map;
   }, [plan]);
-
-  const resolveCharacterIds = (shot: Shot): string[] => {
-    const refIds = (shot.asset_refs?.characters || []).filter(Boolean);
-    if (refIds.length) return refIds;
-    const names = (shot.cast || shot.characters || []).filter(Boolean);
-    return names.map((name) => characterNameToId.get(name) || name);
-  };
 
   const resolveLocationId = (shot: Shot, draftLocation?: string): string | undefined => {
     if (shot.location_id) return shot.location_id;
@@ -251,8 +268,44 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
       audio_notes: selected.audio_notes || "",
     });
     setUseLocationLora(false);
-    setGenPreviewUrl(null);
   }, [selectedId, selected]);
+
+  const applyKeyframeData = (data: Record<string, unknown>) => {
+    setKfStatus(String(data.status || "empty"));
+    setKfCandidates((data.candidates as KfCandidate[]) || []);
+    setKfSelected((data.selected as KfSelected) || null);
+  };
+
+  const reloadKeyframes = async (shotId: string) => {
+    const data = await getKeyframes(projectId, shotId);
+    applyKeyframeData(data);
+  };
+
+  useEffect(() => {
+    if (!selectedId) {
+      setKfStatus("empty");
+      setKfCandidates([]);
+      setKfSelected(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await getKeyframes(projectId, selectedId);
+        if (cancelled || selectedIdRef.current !== selectedId) return;
+        applyKeyframeData(data);
+      } catch {
+        if (!cancelled && selectedIdRef.current === selectedId) {
+          setKfStatus("empty");
+          setKfCandidates([]);
+          setKfSelected(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, selectedId]);
 
   const onReview = async (shotId: string, status: string) => {
     try {
@@ -310,34 +363,22 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
     }
   };
 
-  const onGenerateShot = async () => {
+  const onGenerateKeyframes = async () => {
     if (!selectedId || !selected) return;
     const shotIdAtStart = selectedId;
     const token = ++genTokenRef.current;
     setGenBusy(true);
-    setGenPreviewUrl(null);
     setError(null);
     try {
-      const characterIds = resolveCharacterIds(selected);
-      const locationId = resolveLocationId(selected, draft.location);
-      const out = await visualT2I(projectId, {
-        shot_id: selected.shot_id,
-        location_id: locationId || undefined,
-        character_ids: characterIds,
-        character_id: characterIds[0],
-        prompt: draft.visual_prompt || selected.visual_prompt || "",
+      await generateKeyframes(projectId, selectedId, {
+        count: 4,
         use_location_lora: useLocationLora,
+        prompt_override: draft.visual_prompt || selected.visual_prompt || "",
+        negative_override: draft.negative_prompt || selected.negative_prompt || "",
       });
       if (genTokenRef.current !== token) return;
       if (selectedIdRef.current !== shotIdAtStart) return;
-      const file = String(out.file || "");
-      const charIds = (out.character_ids as string[] | undefined) || characterIds;
-      const locId = (out.location_id as string | undefined) || locationId;
-      if (charIds[0]) {
-        setGenPreviewUrl(visualFileUrl(projectId, charIds[0], "generations", file));
-      } else if (locId) {
-        setGenPreviewUrl(visualLocationFileUrl(projectId, locId, "generations", file));
-      }
+      await reloadKeyframes(selectedId);
     } catch (e) {
       if (genTokenRef.current === token && selectedIdRef.current === shotIdAtStart) {
         setError(e instanceof Error ? e.message : String(e));
@@ -348,6 +389,51 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
       }
     }
   };
+
+  const onSelectKeyframe = async (filename: string) => {
+    if (!selectedId) return;
+    const shotIdAtStart = selectedId;
+    const token = ++genTokenRef.current;
+    setGenBusy(true);
+    setError(null);
+    try {
+      await selectKeyframe(projectId, selectedId, filename);
+      if (genTokenRef.current !== token || selectedIdRef.current !== shotIdAtStart) return;
+      await reloadKeyframes(selectedId);
+    } catch (e) {
+      if (genTokenRef.current === token && selectedIdRef.current === shotIdAtStart) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (genTokenRef.current === token) {
+        setGenBusy(false);
+      }
+    }
+  };
+
+  const onRejectKeyframe = async (filename: string) => {
+    if (!selectedId) return;
+    const shotIdAtStart = selectedId;
+    const token = ++genTokenRef.current;
+    setGenBusy(true);
+    setError(null);
+    try {
+      await rejectKeyframe(projectId, selectedId, filename);
+      if (genTokenRef.current !== token || selectedIdRef.current !== shotIdAtStart) return;
+      await reloadKeyframes(selectedId);
+    } catch (e) {
+      if (genTokenRef.current === token && selectedIdRef.current === shotIdAtStart) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (genTokenRef.current === token) {
+        setGenBusy(false);
+      }
+    }
+  };
+
+  const candidateImageUrl = (file: string, url?: string) =>
+    url || (selectedId ? keyframeFileUrl(projectId, selectedId, file) : "");
 
   const onExportYaml = async (approvedOnly: boolean) => {
     try {
@@ -548,37 +634,108 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
               onChange={(e) => setDraft((d) => ({ ...d, audio_notes: e.target.value }))}
             />
           </label>
-          <label className="row" style={{ gap: 8, alignItems: "center" }}>
-            <input
-              type="checkbox"
-              aria-label="use-location-lora"
-              checked={useLocationLora}
-              disabled={
-                !resolvedLocationId ||
-                !locations.find((l) => l.location_id === resolvedLocationId)?.lora_ready
-              }
-              onChange={(e) => setUseLocationLora(e.target.checked)}
-            />
-            使用地点 LoRA
-          </label>
-          {resolvedLocationId &&
-            !locations.find((l) => l.location_id === resolvedLocationId)?.lora_ready && (
-              <p className="note">该地点尚未 lora_ready，无法启用地点 LoRA</p>
+          <div className="bible-card" style={{ marginTop: 12 }} aria-label="keyframe-panel">
+            <header className="bible-card-head">
+              <h4>关键帧</h4>
+              <span className="tier-pill">{kfStatusLabel(kfStatus)}</span>
+            </header>
+            <label className="row" style={{ gap: 8, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                aria-label="use-location-lora"
+                checked={useLocationLora}
+                disabled={
+                  locked ||
+                  !resolvedLocationId ||
+                  !locations.find((l) => l.location_id === resolvedLocationId)?.lora_ready
+                }
+                onChange={(e) => setUseLocationLora(e.target.checked)}
+              />
+              使用地点 LoRA
+            </label>
+            {resolvedLocationId &&
+              !locations.find((l) => l.location_id === resolvedLocationId)?.lora_ready && (
+                <p className="note">该地点尚未 lora_ready，无法启用地点 LoRA</p>
+              )}
+            <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={
+                  locked ||
+                  genBusy ||
+                  !(draft.visual_prompt || selected.visual_prompt || "").trim()
+                }
+                onClick={() => void onGenerateKeyframes()}
+              >
+                {genBusy ? "生成中…" : "生成关键帧候选"}
+              </button>
+            </div>
+            {kfSelected?.selected_file && (
+              <p className="note">
+                已选：{kfSelected.selected_file}
+                {kfSelected.note ? ` · ${kfSelected.note}` : ""}
+              </p>
             )}
-          <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={
-                genBusy ||
-                (!resolveCharacterIds(selected).length && !resolvedLocationId)
-              }
-              onClick={() => void onGenerateShot()}
-            >
-              {genBusy ? "生成中…" : "生成镜头图"}
-            </button>
-            {genPreviewUrl && (
-              <img src={genPreviewUrl} alt="shot preview" style={{ maxWidth: 320, marginTop: 8 }} />
+            {kfCandidates.length > 0 && (
+              <div
+                className="bible-cards visual-thumbs"
+                aria-label="keyframe-candidates-grid"
+                style={{ marginTop: 8 }}
+              >
+                {kfCandidates.map((candidate) => {
+                  const isSelected = kfSelected?.selected_file === candidate.file;
+                  const src = candidateImageUrl(candidate.file, candidate.url);
+                  return (
+                    <article
+                      key={candidate.file}
+                      className="bible-card"
+                      style={{
+                        outline: isSelected ? "2px solid var(--accent, #888)" : undefined,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        aria-label={`preview-${candidate.file}`}
+                        onClick={() =>
+                          setLightbox({ src, title: candidate.file })
+                        }
+                        style={{
+                          padding: 0,
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          width: "100%",
+                        }}
+                      >
+                        <img
+                          src={src}
+                          alt={candidate.file}
+                          style={{ width: "100%", display: "block", borderRadius: 6 }}
+                        />
+                      </button>
+                      <div className="row" style={{ marginTop: 6, flexWrap: "wrap", gap: 6 }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={locked || genBusy || isSelected}
+                          onClick={() => void onSelectKeyframe(candidate.file)}
+                        >
+                          设为选中
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={locked || genBusy}
+                          onClick={() => void onRejectKeyframe(candidate.file)}
+                        >
+                          退回
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
             )}
           </div>
           <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8 }}>
@@ -730,6 +887,52 @@ export function ShotsPage({ projectId, onOpenAssets }: Props) {
           >
             {loadingMore ? "加载中…" : "加载更多分镜"}
           </button>
+        </div>
+      )}
+
+      {lightbox && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={lightbox.title}
+          onClick={() => setLightbox(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 24,
+          }}
+        >
+          <div
+            className="stack"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "min(960px, 96vw)", maxHeight: "92vh" }}
+          >
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <strong style={{ color: "#fff" }}>{lightbox.title}</strong>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setLightbox(null)}
+              >
+                关闭
+              </button>
+            </div>
+            <img
+              src={lightbox.src}
+              alt={lightbox.title}
+              style={{
+                maxWidth: "100%",
+                maxHeight: "80vh",
+                objectFit: "contain",
+                borderRadius: 8,
+              }}
+            />
+          </div>
         </div>
       )}
     </section>

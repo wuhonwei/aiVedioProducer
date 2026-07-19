@@ -748,3 +748,71 @@ export const visualFileUrl = (
   filename: string,
 ) =>
   `/api/projects/${projectId}/visual/characters/${characterId}/files/${folder}/${filename}`;
+
+export const generateKeyframes = (
+  projectId: string,
+  shotId: string,
+  body?: {
+    count?: number;
+    use_location_lora?: boolean;
+    force?: boolean;
+    prompt_override?: string;
+    negative_override?: string;
+  },
+) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/keyframes/${encodeURIComponent(shotId)}/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        count: body?.count ?? 4,
+        use_location_lora: body?.use_location_lora ?? false,
+        force: body?.force ?? false,
+        prompt_override: body?.prompt_override ?? "",
+        negative_override: body?.negative_override ?? "",
+      }),
+    },
+  );
+
+export const getKeyframes = (projectId: string, shotId: string) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/keyframes/${encodeURIComponent(shotId)}`,
+  );
+
+export const selectKeyframe = (
+  projectId: string,
+  shotId: string,
+  filename: string,
+  note = "",
+) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/keyframes/${encodeURIComponent(shotId)}/select`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, note }),
+    },
+  );
+
+export const rejectKeyframe = (
+  projectId: string,
+  shotId: string,
+  filename: string,
+  reason = "",
+) =>
+  req<Record<string, unknown>>(
+    `/api/projects/${projectId}/keyframes/${encodeURIComponent(shotId)}/reject`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, reason }),
+    },
+  );
+
+export const keyframeFileUrl = (
+  projectId: string,
+  shotId: string,
+  filename: string,
+) =>
+  `/api/projects/${projectId}/keyframes/${encodeURIComponent(shotId)}/files/${encodeURIComponent(filename)}`;
