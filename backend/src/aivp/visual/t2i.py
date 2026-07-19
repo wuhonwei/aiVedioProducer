@@ -270,21 +270,21 @@ def generate_shot_with_loras(
     location_strength: float | None = None,
     use_location_lora: bool = False,
     character_look: str = "full",
+    prompt_order: str = "identity_first",
+    max_character_lora_strength: float | None = None,
     settings=None,
 ) -> dict[str, Any]:
     """Txt2img with optional location LoRA first, then character LoRAs stacked."""
     loras: list[dict[str, Any]] = []
-    prompt_bits: list[str] = []
+    scene_first = prompt_order == "scene_first"
+
     loc_trigger = ""
+    loc_look = ""
     loc_file = None
     if location_id:
         loc_profile = read_location_profile(vpaths.location_profile_json(location_id)) or {}
         loc_trigger = str(loc_profile.get("trigger") or "")
         loc_look = str(loc_profile.get("prompt_zh") or "").strip()
-        if loc_trigger:
-            prompt_bits.append(loc_trigger)
-        if loc_look:
-            prompt_bits.append(loc_look)
         if use_location_lora and loc_profile.get("lora_ready"):
             loc_file = _location_lora_basename(loc_profile, vpaths, location_id)
             if loc_file:
@@ -303,6 +303,8 @@ def generate_shot_with_loras(
                 loras.append({"name": loc_file, "strength": strength})
 
     char_triggers: list[str] = []
+    char_trigger_bits: list[str] = []
+    char_look_bits: list[str] = []
     for cid in character_ids or []:
         path = vpaths.profile_json(cid)
         if not path.exists():
@@ -311,13 +313,13 @@ def generate_shot_with_loras(
         trigger = str(profile.get("trigger") or "")
         if trigger:
             char_triggers.append(trigger)
-            prompt_bits.append(trigger)
+            char_trigger_bits.append(trigger)
         if character_look == "minimal":
             look = _minimal_character_look(profile)
         else:
             look = str(profile.get("prompt_zh") or "").strip()
-        if look and look not in " ".join(prompt_bits):
-            prompt_bits.append(look)
+        if look and look not in " ".join(char_trigger_bits + char_look_bits):
+            char_look_bits.append(look)
         if profile.get("lora_ready"):
             c_lora = _lora_basename(profile, vpaths, cid)
             if c_lora:
@@ -332,7 +334,8 @@ def generate_shot_with_loras(
                 )
                 # Keyframes use minimal look; slightly lower LoRA so scene/env wins.
                 if character_look == "minimal":
-                    strength = max(0.45, min(strength, 0.65))
+                    cap = max_character_lora_strength if max_character_lora_strength is not None else 0.65
+                    strength = max(0.45, min(strength, cap))
                 loras.append(
                     {
                         "name": c_lora,
@@ -341,8 +344,23 @@ def generate_shot_with_loras(
                 )
 
     user_prompt = (prompt or "").strip()
-    if user_prompt:
-        prompt_bits.append(user_prompt)
+    prompt_bits: list[str] = []
+    if scene_first:
+        if user_prompt:
+            prompt_bits.append(user_prompt)
+        prompt_bits.extend(char_trigger_bits)
+        prompt_bits.extend(char_look_bits)
+        if loc_trigger:
+            prompt_bits.append(loc_trigger)
+    else:
+        if loc_trigger:
+            prompt_bits.append(loc_trigger)
+        if loc_look:
+            prompt_bits.append(loc_look)
+        prompt_bits.extend(char_trigger_bits)
+        prompt_bits.extend(char_look_bits)
+        if user_prompt:
+            prompt_bits.append(user_prompt)
     full_prompt = ", ".join(b for b in prompt_bits if b)
 
     # Prefer character generations dir of first cast, else location generations.
@@ -389,4 +407,5 @@ def generate_shot_with_loras(
         "character_triggers": char_triggers,
         "use_location_lora": bool(use_location_lora),
         "location_lora_file": loc_file,
+        "prompt_order": prompt_order,
     }

@@ -46,6 +46,20 @@ SHEET_NEG_MARKERS = (
 )
 
 ENT_ID_RE = re.compile(r"^ent_[A-Za-z0-9_]+$")
+TRIGGER_RE = re.compile(r"\bc\d+_aivp\b", re.IGNORECASE)
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+ACTION_KEYWORDS = (
+    "挥刀",
+    "攻击",
+    "倒地",
+    "战斗",
+    "冲出",
+    "combat",
+    "attack",
+    "fight",
+    "strike",
+)
 
 
 def _http_json(
@@ -174,6 +188,89 @@ def _candidate_paths(project_id: str, shot_id: str, files: list[str]) -> list[Pa
     return out
 
 
+def _load_shot_action_keywords(project_id: str, shot_id: str) -> list[str]:
+    """Return action keywords expected from shot script visual/action fields."""
+    for script in (
+        ROOT / "backend" / "data" / "projects" / project_id / "stages" / "10_shot_script" / "shot_script.json",
+        ROOT / "data" / "projects" / project_id / "stages" / "10_shot_script" / "shot_script.json",
+    ):
+        if not script.exists():
+            continue
+        try:
+            doc = json.loads(script.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for shot in doc.get("shots") or []:
+            if shot.get("shot_id") != shot_id:
+                continue
+            text = f"{shot.get('visual_prompt') or ''} {shot.get('action') or ''}"
+            found = [kw for kw in ACTION_KEYWORDS if kw in text]
+            return found if found else [kw for kw in ("攻击", "挥刀", "倒地") if kw in text]
+    return []
+
+
+def _prompt_starts_with_scene(prompt: str) -> bool:
+    head = (prompt or "")[:20]
+    if not head.strip():
+        return False
+    cjk = len(CJK_RE.findall(head))
+    return cjk >= max(2, len(head.strip()) // 4)
+
+
+def _first_trigger_index(prompt: str) -> int:
+    m = TRIGGER_RE.search(prompt)
+    return m.start() if m else -1
+
+
+def _scene_before_first_trigger(prompt: str) -> bool:
+    idx = _first_trigger_index(prompt)
+    if idx < 0:
+        return _prompt_starts_with_scene(prompt)
+    if idx == 0:
+        return False
+    scene_prefix = prompt[:idx].strip(" ,;")
+    return bool(scene_prefix) and (_prompt_starts_with_scene(scene_prefix) or len(scene_prefix) >= 12)
+
+
+def _ollama_vision_qa(png_paths: list[Path]) -> dict[str, Any]:
+    """Soft QA via Ollama vision when available; never hard-fails."""
+    out: dict[str, Any] = {"available": False, "warnings": []}
+    if not png_paths:
+        return out
+    try:
+        import base64
+
+        path = png_paths[0]
+        if not path.exists():
+            return out
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        body = {
+            "model": "llava",
+            "prompt": (
+                "Does this image show a fight or combat on a dock/pier with multiple people? "
+                "Answer yes or no and one short reason."
+            ),
+            "images": [b64],
+            "stream": False,
+        }
+        req = urllib.request.Request(
+            "http://127.0.0.1:11434/api/generate",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        out["available"] = True
+        answer = str(payload.get("response") or "").strip()
+        out["response"] = answer
+        if answer and answer.lower().startswith("no"):
+            out["warnings"].append(f"vision_qa_negative:{answer[:120]}")
+    except Exception as e:  # noqa: BLE001
+        out["error"] = str(e)
+    return out
+
+
 def _lora_ready_character_ids(project_id: str, character_ids: list[str]) -> list[str]:
     ready: list[str] = []
     for cid in character_ids:
@@ -269,10 +366,36 @@ def main() -> int:
 
     prompt = str(generation.get("prompt") or "")
     prompt_l = prompt.lower()
+
+    scene_first_ok = _scene_before_first_trigger(prompt)
+    report["assertions"]["prompt_scene_before_triggers"] = scene_first_ok
+    if not scene_first_ok:
+        failures.append("prompt_does_not_lead_with_scene_action")
+
+    expected_action_kws = _load_shot_action_keywords(project_id, shot_id)
+    if expected_action_kws:
+        action_ok = any(kw in prompt for kw in expected_action_kws)
+        report["expected_action_keywords"] = expected_action_kws
+        report["assertions"]["prompt_contains_action_keywords"] = action_ok
+        if not action_ok:
+            failures.append(f"prompt_missing_action_keywords:{expected_action_kws}")
+    else:
+        report["assertions"]["prompt_contains_action_keywords"] = True
+
+    trigger_at_start = bool(TRIGGER_RE.match(prompt.strip()))
+    report["assertions"]["prompt_not_trigger_first"] = not trigger_at_start
+    if trigger_at_start:
+        failures.append("prompt_starts_with_character_trigger")
+
     framing_ok = any(tok in prompt_l for tok in FRAMING_TOKENS)
     report["assertions"]["prompt_has_framing"] = framing_ok
     if not framing_ok:
         failures.append("prompt_missing_framing_tokens")
+
+    prompt_no_dingzhuang = "定妆" not in prompt
+    report["assertions"]["prompt_no_dingzhuang"] = prompt_no_dingzhuang
+    if not prompt_no_dingzhuang:
+        failures.append("prompt_contains_dingzhuang")
 
     sheet_in_prompt = any(b.lower() in prompt_l if b.isascii() else b in prompt for b in SHEET_PROMPT_BANS)
     report["assertions"]["prompt_no_sheet_language"] = not sheet_in_prompt
@@ -311,7 +434,13 @@ def main() -> int:
         else:
             report["assertions"]["pngs_non_white"] = any(m.get("non_white") for m in png_meta)
 
+    vision = _ollama_vision_qa([p for p in paths if p.exists()])
+    report["vision_qa"] = vision
+    if vision.get("warnings"):
+        report["vision_qa_warnings"] = vision["warnings"]
+
     report["prompt_full"] = prompt
+    report["prompt_head_200"] = prompt[:200]
     report["negative_full"] = negative
     report["loras"] = loras
     report["ok"] = not failures

@@ -43,6 +43,12 @@ _SHOT_SIZE_FRAMING: dict[str, str] = {
     "over_shoulder": "over-the-shoulder shot, cinematic anime still",
 }
 
+_KEYFRAME_ACTION_NEGATIVE = (
+    "portrait, solo character, standing still, looking at viewer, facing camera, "
+    "character lineup, group photo, static pose, neutral pose, A-pose, "
+    "character reference, bust shot, headshot"
+)
+
 _KEYFRAME_SHEET_NEGATIVE = (
     "character sheet, turnaround sheet, model sheet, reference sheet, "
     "multiple views, plain white background, studio lighting, "
@@ -78,21 +84,70 @@ def _normalize_shot_size(raw: str) -> str:
     return aliases.get(key, key)
 
 
+_ACTION_FRAMING_MARKERS = (
+    "攻击",
+    "战斗",
+    "挥刀",
+    "冲出",
+    "倒地",
+    "人群",
+    "attack",
+    "combat",
+    "fight",
+    "strike",
+    "charge",
+    "fall",
+    "crowd",
+)
+
+_DOCK_MARKERS = ("码头", "渡口", "dock", "pier", "wharf")
+
+
+def _scene_text_for_framing(shot: dict[str, Any]) -> str:
+    visual = str(shot.get("visual_prompt") or "")
+    action = str(shot.get("action") or "")
+    return f"{visual} {action}"
+
+
+def _is_action_scene(shot: dict[str, Any]) -> bool:
+    text = _scene_text_for_framing(shot)
+    return any(m in text for m in _ACTION_FRAMING_MARKERS)
+
+
+def _has_dock_setting(shot: dict[str, Any]) -> bool:
+    text = _scene_text_for_framing(shot)
+    loc = str(shot.get("location") or shot.get("location_name") or "")
+    return any(m in text or m in loc for m in _DOCK_MARKERS)
+
+
 def _shot_framing_tokens(shot: dict[str, Any]) -> str:
     shot_type = _normalize_shot_size(str(shot.get("shot_type") or ""))
     camera = shot.get("camera") if isinstance(shot.get("camera"), dict) else {}
     size = _normalize_shot_size(
         str(camera.get("shot_size") or shot.get("shot_type") or "medium")
     )
+    action_scene = _is_action_scene(shot)
+
+    if action_scene and size in ("close", "medium_close", "medium"):
+        size = "medium_wide"
+
     framing = (
         _SHOT_SIZE_FRAMING.get(size)
         or _SHOT_SIZE_FRAMING.get(shot_type)
         or _SHOT_SIZE_FRAMING["medium"]
     )
+    if action_scene and size in ("wide", "medium_wide", "establishing", "full"):
+        framing = (
+            "wide dynamic action shot, full body visible, environment in frame, "
+            "cinematic anime still, dynamic composition"
+        )
+
     angle = str(camera.get("angle") or "eye level").strip()
     movement = str(camera.get("movement") or "static").strip()
     lens = str(camera.get("lens") or "").strip()
     composition = str(camera.get("composition") or "").strip()
+    if action_scene and "centered" in composition.lower():
+        composition = ""
     notes = str(camera.get("notes") or "").strip() if isinstance(camera.get("notes"), str) else ""
     bits = [
         framing,
@@ -104,6 +159,15 @@ def _shot_framing_tokens(shot: dict[str, Any]) -> str:
         "cinematic still from anime film",
         "in-scene environment",
     ]
+    if action_scene:
+        bits.append("multi-character action scene, combat staging, dynamic poses")
+        bits.append(
+            "action in progress, mid-motion, not portrait, characters not facing camera"
+        )
+        if _has_dock_setting(shot):
+            bits.append(
+                "crowd panic, dock pier wooden planks, waterfront action on wooden dock"
+            )
     return ", ".join(b for b in bits if b)
 
 
@@ -122,15 +186,24 @@ def _build_keyframe_prompt(shot: dict[str, Any], *, override: str = "") -> str:
     if action and action == visual:
         action = ""
 
-    scene_bits = [visual]
-    if action and action not in visual:
-        scene_bits.append(action)
+    action_scene = _is_action_scene(shot)
+    if action_scene and action:
+        scene_bits = [action]
+        if visual and visual not in action:
+            scene_bits.append(visual)
+    else:
+        scene_bits = [visual]
+        if action and action not in visual:
+            scene_bits.append(action)
 
     framing = _shot_framing_tokens(shot)
     parts = [b for b in scene_bits + [framing] if b]
     if _shot_has_characters(shot):
         parts.append(_KEYFRAME_SCENE_LOCK)
-    return ", ".join(parts)
+    prompt = ", ".join(parts)
+    if action:
+        prompt = f"画面必须表现：{action}, {prompt}, 画面必须表现：{action}"
+    return prompt
 
 
 def _shot_has_characters(shot: dict[str, Any]) -> bool:
@@ -148,6 +221,8 @@ def _shot_has_characters(shot: dict[str, Any]) -> bool:
 def _build_keyframe_negative(shot: dict[str, Any], override: str = "") -> str:
     base = (override or shot.get("negative_prompt") or _DEFAULT_NEGATIVE).strip()
     parts = [base, _KEYFRAME_SHEET_NEGATIVE]
+    if _is_action_scene(shot):
+        parts.append(_KEYFRAME_ACTION_NEGATIVE)
     if _shot_has_characters(shot):
         parts.append("empty scene, no humans, deserted")
     return ", ".join(parts)
@@ -393,6 +468,8 @@ def generate_keyframes(
 
     candidates: list[dict[str, str]] = []
     last_out: dict[str, Any] | None = None
+    final_prompt = prompt
+    max_char_lora = 0.45 if len(stacked_character_ids) >= 2 else None
     for _ in range(count):
         out = generate_shot_with_loras(
             vpaths,
@@ -404,9 +481,12 @@ def generate_keyframes(
             shot_id=shot_id,
             use_location_lora=use_location_lora,
             character_look="minimal",
+            prompt_order="scene_first",
+            max_character_lora_strength=max_char_lora,
             settings=settings,
         )
         last_out = out
+        final_prompt = str(out.get("prompt") or prompt)
 
         stem = next_candidate_stem(kpaths, shot_id)
         filename = f"{stem}.png"
@@ -417,7 +497,7 @@ def generate_keyframes(
         sidecar = {
             "file": filename,
             "shot_id": shot_id,
-            "prompt": prompt,
+            "prompt": final_prompt,
             "negative": negative,
             "loras": out.get("loras") or [],
             "created_at": created_at,
@@ -428,7 +508,7 @@ def generate_keyframes(
 
     generation: dict[str, Any] = {
         "shot_id": shot_id,
-        "prompt": prompt,
+        "prompt": final_prompt,
         "negative": negative,
         "character_ids": character_ids,
         "location_id": location_id,
@@ -438,6 +518,7 @@ def generate_keyframes(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "candidate_count": len(candidates),
         "warnings": warnings,
+        "prompt_order": "scene_first",
     }
     _write_json(kpaths.generation_json(shot_id), generation)
 
