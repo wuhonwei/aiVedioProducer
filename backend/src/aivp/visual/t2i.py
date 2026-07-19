@@ -327,12 +327,16 @@ def generate_shot_with_loras(
                     c_lora,
                     settings=settings,
                 )
+                strength = float(
+                    profile.get("lora_weight_default") or DEFAULT_LORA_WEIGHT
+                )
+                # Keyframes use minimal look; slightly lower LoRA so scene/env wins.
+                if character_look == "minimal":
+                    strength = max(0.45, min(strength, 0.65))
                 loras.append(
                     {
                         "name": c_lora,
-                        "strength": float(
-                            profile.get("lora_weight_default") or DEFAULT_LORA_WEIGHT
-                        ),
+                        "strength": strength,
                     }
                 )
 

@@ -457,12 +457,27 @@ def test_build_keyframe_prompt_includes_camera_framing():
             "lens": "35mm",
             "composition": "rule of thirds",
         },
+        "cast": ["林砚之"],
     }
     prompt = _build_keyframe_prompt(shot)
     assert "国风动画角色定妆" not in prompt
     assert "medium" in prompt.lower()
     assert "cinematic" in prompt.lower()
+    assert "full body" in prompt.lower()
+    assert "environment background visible" in prompt.lower()
     assert "林砚之立于渡口" in prompt
+
+
+def test_build_keyframe_prompt_normalizes_spaced_shot_size():
+    shot = {
+        "visual_prompt": "渡口对峙",
+        "shot_type": "medium wide",
+        "camera": {"shot_size": "medium wide"},
+        "cast": ["林砚之"],
+    }
+    prompt = _build_keyframe_prompt(shot)
+    assert "medium wide shot" in prompt.lower()
+    assert "full body" in prompt.lower()
 
 
 def test_resolve_name_to_id_prefix():

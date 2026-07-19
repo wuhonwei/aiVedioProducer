@@ -59,10 +59,31 @@ def _strip_sheet_language(text: str) -> str:
     return out.strip("；，, ").strip()
 
 
+def _normalize_shot_size(raw: str) -> str:
+    """Map 'medium wide' / 'medium-wide' to dict keys like medium_wide."""
+    key = str(raw or "").strip().lower().replace("-", " ")
+    key = "_".join(part for part in key.split() if part)
+    aliases = {
+        "mediumwide": "medium_wide",
+        "mediumclose": "medium_close",
+        "closeup": "close",
+        "close_up": "close",
+        "fullbody": "full",
+        "full_body": "full",
+        "establishing_shot": "establishing",
+        "wide_shot": "wide",
+        "overshoulder": "over_shoulder",
+        "over_the_shoulder": "over_shoulder",
+    }
+    return aliases.get(key, key)
+
+
 def _shot_framing_tokens(shot: dict[str, Any]) -> str:
-    shot_type = str(shot.get("shot_type") or "").strip().lower()
+    shot_type = _normalize_shot_size(str(shot.get("shot_type") or ""))
     camera = shot.get("camera") if isinstance(shot.get("camera"), dict) else {}
-    size = str(camera.get("shot_size") or shot_type or "medium").strip().lower()
+    size = _normalize_shot_size(
+        str(camera.get("shot_size") or shot.get("shot_type") or "medium")
+    )
     framing = (
         _SHOT_SIZE_FRAMING.get(size)
         or _SHOT_SIZE_FRAMING.get(shot_type)
@@ -82,9 +103,14 @@ def _shot_framing_tokens(shot: dict[str, Any]) -> str:
         notes,
         "cinematic still from anime film",
         "in-scene environment",
-        "NOT character sheet, NOT turnaround sheet, NOT 定妆, NOT model sheet",
     ]
     return ", ".join(b for b in bits if b)
+
+
+_KEYFRAME_SCENE_LOCK = (
+    "characters interacting in location, narrative moment, dynamic pose, "
+    "environment background visible, story beat, not portrait studio"
+)
 
 
 def _build_keyframe_prompt(shot: dict[str, Any], *, override: str = "") -> str:
@@ -101,7 +127,10 @@ def _build_keyframe_prompt(shot: dict[str, Any], *, override: str = "") -> str:
         scene_bits.append(action)
 
     framing = _shot_framing_tokens(shot)
-    return ", ".join(b for b in scene_bits + [framing] if b)
+    parts = [b for b in scene_bits + [framing] if b]
+    if _shot_has_characters(shot):
+        parts.append(_KEYFRAME_SCENE_LOCK)
+    return ", ".join(parts)
 
 
 def _shot_has_characters(shot: dict[str, Any]) -> bool:
