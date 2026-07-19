@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
-import { createProject, listProjects, type Project } from "../api/client";
+import { createProject, deleteProject, listProjects, type Project } from "../api/client";
 
 type Props = {
   onSelect: (projectId: string) => void;
+  currentProjectId?: string | null;
+  onDeleted?: (projectId: string) => void;
 };
 
-export function ProjectListPage({ onSelect }: Props) {
+export function ProjectListPage({ onSelect, onDeleted }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -45,6 +48,24 @@ export function ProjectListPage({ onSelect }: Props) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const onDelete = async (p: Project) => {
+    const ok = window.confirm(
+      `确定删除「${p.name}」？将永久删除该项目全部数据（文本、视觉资产、LoRA、关键帧等），不可恢复。`,
+    );
+    if (!ok) return;
+    setDeletingId(p.id);
+    setError(null);
+    try {
+      await deleteProject(p.id);
+      await refresh();
+      onDeleted?.(p.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -89,12 +110,28 @@ export function ProjectListPage({ onSelect }: Props) {
       ) : (
         <ul className="project-list">
           {projects.map((p) => (
-            <li key={p.id}>
-              <button type="button" onClick={() => onSelect(p.id)}>
+            <li key={p.id} className="row" style={{ alignItems: "stretch", gap: 8 }}>
+              <button
+                type="button"
+                style={{ flex: 1, textAlign: "left" }}
+                onClick={() => onSelect(p.id)}
+              >
                 <strong>{p.name}</strong>
                 <div style={{ color: "var(--ink-soft)", fontSize: "0.9rem" }}>
                   {p.id}
                 </div>
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                aria-label={`删除项目 ${p.name}`}
+                disabled={creating || deletingId === p.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void onDelete(p);
+                }}
+              >
+                删除
               </button>
             </li>
           ))}

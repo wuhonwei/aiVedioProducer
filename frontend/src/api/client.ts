@@ -93,6 +93,12 @@ export const listProjects = () => req<Project[]>("/api/projects");
 export const getProject = (projectId: string) =>
   req<Project>(`/api/projects/${projectId}`);
 
+export const deleteProject = (projectId: string) =>
+  req<{ deleted: boolean; id: string; warning?: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    { method: "DELETE" },
+  );
+
 export const uploadSource = (projectId: string, file: File) => {
   const form = new FormData();
   form.append("file", file);
