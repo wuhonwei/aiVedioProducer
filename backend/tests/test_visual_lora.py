@@ -260,3 +260,86 @@ def test_batch_lora_train_job_progress(tmp_path: Path):
     assert len(status["items"]) == 2
     assert all(it["status"] == "succeeded" for it in status["items"])
     assert all(it.get("lora_file") for it in status["items"])
+
+
+def test_batch_lora_train_skips_already_trained(tmp_path: Path):
+    """Already-trained characters with LoRA weights must not be re-queued."""
+    trainer = tmp_path / "fake_train.py"
+    trainer.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "out = Path(sys.argv[1])\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'fake.safetensors').write_bytes(b'lora')\n",
+        encoding="utf-8",
+    )
+    cmd = f'{sys.executable} "{trainer}" "{{output_dir}}"'
+    app = create_app(
+        Settings(
+            data_root=tmp_path,
+            db_url=f"sqlite:///{tmp_path / 'batch_skip.db'}",
+            image_backend="stub",
+            lora_train_cmd=cmd,
+        )
+    )
+    app.state.run_jobs_inline = True
+    app.state.llm = FakeLlm(default={})
+    client = TestClient(app)
+    pid = client.post("/api/projects", json={"name": "batch-skip"}).json()["id"]
+    paths = ProjectPaths(tmp_path, pid)
+    paths.ensure()
+    chars = [
+        {"id": "ent_0001", "name": "Lin", "tier": "major", "prompt_zh": "blue robe"},
+        {"id": "ent_0002", "name": "Chen", "tier": "major", "prompt_zh": "brown robe"},
+    ]
+    paths.auto_bible_json.write_text(
+        json.dumps({"characters": chars}, ensure_ascii=False), encoding="utf-8"
+    )
+    vpaths = VisualPaths(tmp_path, pid)
+    backend = StubImageBackend()
+    for ch in chars:
+        ensure_profile(vpaths, ch)
+        cand = generate_candidates(vpaths, {"characters": [ch]}, backend, count=4)
+        sheets = generate_character_sheets(vpaths, ch, backend)
+        sheet_names = [f["file"] for f in sheets["files"]]
+        curate_candidates(
+            vpaths,
+            ch["id"],
+            cand["characters"][0]["files"],
+            keep_sheets=sheet_names,
+        )
+        export_train_package(vpaths, ch["id"], require_can_train=True)
+
+    # Mark Lin as already trained with weights on disk.
+    lin_profile = json.loads(vpaths.profile_json("ent_0001").read_text(encoding="utf-8"))
+    lin_lora = vpaths.lora_dir("ent_0001") / "c6797781a4e4b_aivp.safetensors"
+    lin_lora.write_bytes(b"existing")
+    lin_profile["train_status"] = "trained"
+    lin_profile["status"] = "trained"
+    lin_profile["lora_file"] = lin_lora.name
+    lin_profile["lora_ready"] = False
+    vpaths.profile_json("ent_0001").write_text(
+        json.dumps(lin_profile, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    job = client.post(
+        f"/api/projects/{pid}/visual/lora/train/batch", json={"auto_package": False}
+    )
+    assert job.status_code == 202, job.text
+    body = job.json()
+    assert body["progress_total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["character_id"] == "ent_0002"
+    skipped = body.get("skipped") or []
+    assert any(
+        s.get("character_id") == "ent_0001" and s.get("error") == "already_trained"
+        for s in skipped
+    )
+
+    status = client.get(f"/api/projects/{pid}/visual/jobs/{body['id']}").json()
+    assert status["status"] == "succeeded", status
+    assert status["progress_done"] == 1
+    assert len(status["items"]) == 1
+    assert status["items"][0]["character_id"] == "ent_0002"
+    # Existing Lin weights must not be overwritten by the fake trainer.
+    assert lin_lora.read_bytes() == b"existing"

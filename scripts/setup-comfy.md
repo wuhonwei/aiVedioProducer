@@ -12,16 +12,16 @@ git clone https://github.com/comfyanonymous/ComfyUI.git tools\ComfyUI
 ```
 
 
-## PyAV stub (Smart App Control / image-only)
+## Smart App Control stubs (image-only)
 
-Windows **Smart App Control** may block the real PyAV wheel (unsigned `.pyd`). For **image-only** Comfy on port 8190, use a pure-Python stub instead of `pip install av`:
+Windows **Smart App Control** / “应用程序控制策略已阻止此文件” may block unsigned native modules (PyAV, SciPy `_rbfinterp_pythran`, etc.). For **image-only** Comfy on port 8190, install pure-Python stubs:
 
 ```powershell
 # from repo root, after venv + requirements
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\patch-comfy-av-stub.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\patch-comfy-sac-stubs.ps1
 ```
 
-Re-run after recreating `tools\ComfyUI\.venv`. Video/audio nodes that need FFmpeg will not work with the stub.
+Re-run after recreating `tools\ComfyUI\.venv`. Video/audio nodes and SciPy `RBFInterpolator` will not work with the stubs.
 
 
 ## 2. Python deps
@@ -57,6 +57,12 @@ Example hardlink from an existing weights file (instance stays `tools\ComfyUI`):
 
 ```powershell
 mklink /H tools\ComfyUI\models\checkpoints\Guofeng4.2XL.safetensors D:\path\to\Guofeng4.2XL.safetensors
+```
+
+LoRA weights trained by AIVP live under `backend/data/projects/.../lora/`. Before probe/t2i, the backend **stages** them into `tools/ComfyUI/models/loras/` (hardlink or copy). You normally do not need to copy LoRAs by hand. To backfill already-trained files:
+
+```powershell
+python .\scripts\stage-project-loras.py
 ```
 
 ## 4. Start

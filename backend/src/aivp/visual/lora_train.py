@@ -229,40 +229,42 @@ def execute_lora_train(
         on_progress(0, 1, "正在启动训练进程…")
 
     started = time.monotonic()
-    proc = subprocess.Popen(
-        argv,
-        shell=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    # Redirect to files (not PIPE). Windows venv python.exe is a launcher that
+    # re-execs the base interpreter; PIPE + launcher easily deadlocks once tqdm
+    # fills the buffer, which looks like a hung train holding GPU memory.
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    with stdout_path.open("w", encoding="utf-8", errors="replace") as out_f, stderr_path.open(
+        "w", encoding="utf-8", errors="replace"
+    ) as err_f:
+        proc = subprocess.Popen(
+            argv,
+            shell=False,
+            stdout=out_f,
+            stderr=err_f,
+            text=True,
+            env=env,
+        )
+        while proc.poll() is None:
+            elapsed = int(time.monotonic() - started)
+            if on_progress:
+                on_progress(
+                    0,
+                    1,
+                    f"LoRA 微调进行中… 已运行 {elapsed}s（请耐心等待，通常需数十分钟）",
+                )
+            time.sleep(2.0)
+
+    stdout_text = (
+        stdout_path.read_text(encoding="utf-8", errors="replace")
+        if stdout_path.exists()
+        else ""
     )
-    stdout_chunks: list[str] = []
-    stderr_chunks: list[str] = []
-
-    def _pump(stream, chunks: list[str]) -> None:
-        if stream is None:
-            return
-        for line in stream:
-            chunks.append(line)
-            # Keep logs bounded in memory; full text still written at end via join.
-            if len(chunks) > 20000:
-                del chunks[:10000]
-
-    t_out = threading.Thread(target=_pump, args=(proc.stdout, stdout_chunks), daemon=True)
-    t_err = threading.Thread(target=_pump, args=(proc.stderr, stderr_chunks), daemon=True)
-    t_out.start()
-    t_err.start()
-    while proc.poll() is None:
-        elapsed = int(time.monotonic() - started)
-        if on_progress:
-            on_progress(0, 1, f"LoRA 微调进行中… 已运行 {elapsed}s（请耐心等待，通常需数十分钟）")
-        time.sleep(2.0)
-    t_out.join(timeout=5)
-    t_err.join(timeout=5)
-    stdout_text = "".join(stdout_chunks)
-    stderr_text = "".join(stderr_chunks)
-    stdout_path.write_text(stdout_text, encoding="utf-8")
-    stderr_path.write_text(stderr_text, encoding="utf-8")
+    stderr_text = (
+        stderr_path.read_text(encoding="utf-8", errors="replace")
+        if stderr_path.exists()
+        else ""
+    )
     result["returncode"] = proc.returncode
     result["stdout"] = stdout_text[-2000:]
     result["stderr"] = stderr_text[-2000:]
@@ -293,6 +295,13 @@ def execute_lora_train(
         profile.pop("train_error", None)
         result["trained"] = True
         result["lora_file"] = loras[0].name
+        try:
+            from aivp.visual.lora_staging import stage_project_lora
+
+            stage_project_lora(vpaths.lora_dir(character_id), loras[0].name, settings=settings)
+        except OSError:
+            # Staging is best-effort; probe will retry before generate.
+            pass
     else:
         profile["status"] = "train_failed"
         profile["train_status"] = "failed"

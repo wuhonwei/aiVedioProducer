@@ -34,14 +34,9 @@ import {
 
 type Props = { projectId: string };
 
-const PROBE_FRAMING =
-  "solo, 1person, looking at viewer, upper body portrait, simple background, 人物半身特写";
-
-/** Scene/framing prompt for t2i probe; prefer character look text when available. */
-export function defaultProbePrompt(c: Pick<VisualCharacter, "name" | "prompt_zh">): string {
-  const look = (c.prompt_zh || "").trim();
-  if (look) return `${look}，${PROBE_FRAMING}`;
-  return `${c.name}，${PROBE_FRAMING}`;
+/** Optional probe extra only — backend builds the training-aligned prompt when empty. */
+export function defaultProbePrompt(_c: Pick<VisualCharacter, "name" | "prompt_zh">): string {
+  return "";
 }
 
 type Lightbox = { src: string; title: string } | null;
@@ -94,6 +89,13 @@ export function VisualPage({ projectId }: Props) {
     characterId?: string | null;
     step?: string | null;
     items?: Array<{
+      character_id: string;
+      name: string;
+      status: string;
+      error?: string | null;
+      lora_file?: string | null;
+    }>;
+    skipped?: Array<{
       character_id: string;
       name: string;
       status: string;
@@ -232,6 +234,7 @@ export function VisualPage({ projectId }: Props) {
           characterId: j.current_character_id || j.current_location_id || null,
           step: j.bootstrap_step || null,
           items: Array.isArray(j.items) ? j.items : undefined,
+          skipped: Array.isArray(j.skipped) ? j.skipped : undefined,
         });
       }
       // Refresh gallery whenever progress advances or status/note changes.
@@ -588,6 +591,8 @@ export function VisualPage({ projectId }: Props) {
     try {
       const r = await probeVisualLora(projectId, active.character_id, probePrompt);
       const file = String(r.file || "");
+      const usedPrompt = String(r.prompt || "");
+      if (usedPrompt) setProbePrompt(usedPrompt);
       setProbeResult(
         file
           ? visualFileUrl(projectId, active.character_id, "generations", file)
@@ -1116,9 +1121,22 @@ export function VisualPage({ projectId }: Props) {
                           : "（每完成一张会立刻出现在下方）"}
                   </p>
                   {jobProgress.kind === "lora_train_batch" &&
-                    !!jobProgress.items?.length && (
+                    (!!jobProgress.items?.length ||
+                      !!jobProgress.skipped?.length) && (
                       <ul className="visual-batch-train-list">
-                        {jobProgress.items.map((it) => (
+                        {(jobProgress.skipped || []).map((it) => (
+                          <li key={`skip-${it.character_id}`}>
+                            <strong>{it.name}</strong>
+                            <span className="visual-char-flag">skipped</span>
+                            {it.error ? (
+                              <span className="visual-char-stats">{it.error}</span>
+                            ) : null}
+                            {it.lora_file ? (
+                              <span className="visual-char-stats">{it.lora_file}</span>
+                            ) : null}
+                          </li>
+                        ))}
+                        {(jobProgress.items || []).map((it) => (
                           <li key={it.character_id}>
                             <strong>{it.name}</strong>
                             <span className={`visual-char-flag ${
@@ -1289,7 +1307,7 @@ export function VisualPage({ projectId }: Props) {
                   onClick={() => void onTrainBatch()}
                   title={
                     loraTrainConfigured
-                      ? "串行微调全部 package_ready / 可导出角色，并显示逐个进度"
+                      ? "串行微调未训练角色（已 trained 且有 LoRA 文件的会自动跳过）"
                       : "请先配置 AIVP_LORA_TRAIN_CMD"
                   }
                 >
@@ -1584,10 +1602,11 @@ export function VisualPage({ projectId }: Props) {
 
               <div className="stack" style={{ marginTop: 8 }}>
                 <label className="field">
-                  试生成验证（训练完成后用 trigger 验证 LoRA）
+                  试生成验证（留空则使用与训练集一致的全身提示词；半身中文默认会被忽略）
                   <input
                     value={probePrompt}
                     onChange={(e) => setProbePrompt(e.target.value)}
+                    placeholder="可选附加说明；点验证后显示实际使用的完整提示词"
                     aria-label="probe-prompt"
                   />
                 </label>

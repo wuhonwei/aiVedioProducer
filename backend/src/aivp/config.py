@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     comfy_base_url: str = "http://127.0.0.1:8188"
     comfy_checkpoint: str = ""
     comfy_timeout_sec: float = 180.0
+    # Empty = auto tools/ComfyUI/models/loras under repo root
+    comfy_loras_dir: Path | None = None
     lora_train_cmd: str = ""
     visual_candidate_count: int = 8
     ollama_vision_model: str = "qwen2.5vl:7b"

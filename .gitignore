@@ -25,6 +25,17 @@ Thumbs.db
 
 # Project-only ComfyUI install (native; do not commit)
 tools/ComfyUI/
+# kohya sd-scripts checkout used by AIVP_LORA_TRAIN_CMD
+tools/sd-scripts/
+tools/lora_train/tokenizer_cache/
+tools/*.log
+
+# Local scratch / debug dumps
+_commitmsg.txt
+_moondream_pull.*
+_pytest_out.txt
+backend/_dbg_*.py
+backend_uvicorn.*.log
 
 gh_windows_amd64.zip
 

@@ -469,6 +469,36 @@ def start_lora_train_character(
     return job
 
 
+def _existing_lora_weights(vpaths: VisualPaths, character_id: str, profile: dict) -> list[Path]:
+    """Return on-disk LoRA .safetensors for this character (project lora/ only)."""
+    lora_dir = vpaths.lora_dir(character_id)
+    named = profile.get("lora_file")
+    found: list[Path] = []
+    if isinstance(named, str) and named.strip():
+        path = lora_dir / Path(named).name
+        if path.is_file():
+            found.append(path)
+    for path in sorted(lora_dir.glob("*.safetensors")):
+        if path.is_file() and path not in found:
+            found.append(path)
+    return found
+
+
+def _batch_train_skip_reason(
+    vpaths: VisualPaths, character_id: str, profile: dict
+) -> str | None:
+    """Skip characters that already have a finished LoRA (or are mid-train)."""
+    status = str(profile.get("train_status") or "")
+    if status == "training":
+        return "already_training"
+    weights = _existing_lora_weights(vpaths, character_id, profile)
+    if not weights:
+        return None
+    if status == "trained" or bool(profile.get("lora_ready")):
+        return "already_trained"
+    return None
+
+
 def _resolve_batch_train_targets(
     vpaths: VisualPaths,
     majors: list[dict],
@@ -481,7 +511,20 @@ def _resolve_batch_train_targets(
     for ch in majors:
         cid = str(ch.get("id") or "")
         name = str(ch.get("name") or cid)
-        ensure_profile(vpaths, ch)
+        profile = ensure_profile(vpaths, ch)
+        skip_reason = _batch_train_skip_reason(vpaths, cid, profile)
+        if skip_reason:
+            weights = _existing_lora_weights(vpaths, cid, profile)
+            skipped.append(
+                {
+                    "character_id": cid,
+                    "name": name,
+                    "status": "skipped",
+                    "error": skip_reason,
+                    "lora_file": weights[0].name if weights else profile.get("lora_file"),
+                }
+            )
+            continue
         package = vpaths.lora_dir(cid) / "train_package.json"
         check = check_trainset(vpaths, cid)
         if auto_package and not package.exists():
@@ -555,13 +598,29 @@ def start_lora_train_batch(
         vpaths, majors, auto_package=bool(body.auto_package)
     )
     if not ready:
+        already = sum(
+            1
+            for s in skipped
+            if str(s.get("error") or "").startswith("already_")
+        )
         raise HTTPException(
             status_code=400,
-            detail=f"no_characters_ready_to_train; skipped={len(skipped)}",
+            detail=(
+                f"no_characters_ready_to_train; skipped={len(skipped)}"
+                + (f"; already_trained_or_training={already}" if already else "")
+            ),
         )
 
     job_id = uuid.uuid4().hex[:12]
     items = list(ready)
+    already_n = sum(
+        1 for s in skipped if str(s.get("error") or "") in {"already_trained", "already_training"}
+    )
+    note = f"批量微调已排队：共 {len(items)} 个角色"
+    if already_n:
+        note += f"（已跳过 {already_n} 个已训练/训练中）"
+    elif skipped:
+        note += f"（另跳过 {len(skipped)} 个未就绪）"
     job = {
         "id": job_id,
         "project_id": project_id,
@@ -569,7 +628,7 @@ def start_lora_train_batch(
         "status": "queued",
         "progress_done": 0,
         "progress_total": len(items),
-        "progress_note": f"批量微调已排队：共 {len(items)} 个角色",
+        "progress_note": note,
         "current_character_id": None,
         "items": items,
         "skipped": skipped,
@@ -705,6 +764,7 @@ def probe_lora(
         backend,
         shot_id=(body.shot_id if body else None) or "probe",
         is_probe=True,
+        settings=settings,
     )
 
 
@@ -779,6 +839,7 @@ def t2i(
                 character_ids=char_ids or None,
                 shot_id=body.shot_id,
                 use_location_lora=bool(body.use_location_lora),
+                settings=settings,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
@@ -791,6 +852,7 @@ def t2i(
         backend,
         shot_id=body.shot_id,
         is_probe=bool(body.is_probe),
+        settings=settings,
     )
 
 
