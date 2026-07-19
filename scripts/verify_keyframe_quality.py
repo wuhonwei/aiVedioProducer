@@ -7,6 +7,7 @@ Exits non-zero on any assertion failure. Writes JSON report to stdout and
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import urllib.error
@@ -15,6 +16,9 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "backend"
+if str(BACKEND / "src") not in sys.path:
+    sys.path.insert(0, str(BACKEND / "src"))
 REPORT_PATH = ROOT / ".superpowers" / "sdd" / "keyframe_auto_verify.json"
 
 DEFAULT_BASE = "http://127.0.0.1:8000"
@@ -55,10 +59,20 @@ ACTION_KEYWORDS = (
     "倒地",
     "战斗",
     "冲出",
+    "打斗",
+    "厮杀",
     "combat",
     "attack",
     "fight",
     "strike",
+)
+
+_VISION_QA_SYSTEM = (
+    "You are a strict image QA assistant. Answer only with valid JSON, no markdown."
+)
+_VISION_QA_USER = (
+    "Does this image show a fight or violent attack with multiple people on a dock/pier? "
+    'Answer JSON {"has_action":bool,"has_multiple_people":bool,"has_dock_or_waterfront":bool,"brief":"..."}'
 )
 
 
@@ -232,42 +246,120 @@ def _scene_before_first_trigger(prompt: str) -> bool:
     return bool(scene_prefix) and (_prompt_starts_with_scene(scene_prefix) or len(scene_prefix) >= 12)
 
 
-def _ollama_vision_qa(png_paths: list[Path]) -> dict[str, Any]:
-    """Soft QA via Ollama vision when available; never hard-fails."""
-    out: dict[str, Any] = {"available": False, "warnings": []}
+def _is_action_shot(project_id: str, shot_id: str) -> bool:
+    return bool(_load_shot_action_keywords(project_id, shot_id))
+
+
+def _ollama_vision_available() -> tuple[bool, str, str]:
+    """Return (available, base_url, model)."""
+    try:
+        from aivp.config import Settings
+
+        settings = Settings()
+        base = settings.ollama_base_url.rstrip("/")
+        model = settings.ollama_vision_model
+        req = urllib.request.Request(f"{base}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status != 200:
+                return False, base, model
+            raw = resp.read().decode("utf-8")
+        tags = json.loads(raw)
+        installed = [str(m.get("name") or "") for m in (tags.get("models") or [])]
+        names = {n.split(":")[0] for n in installed if n}
+        model_base = model.split(":")[0]
+        available = model in installed or model_base in names or any(
+            model_base in n or n in model for n in installed
+        )
+        if not available:
+            available = any(
+                any(tok in n.lower() for tok in ("llava", "vl", "vision")) for n in installed
+            )
+        return available, base, model
+    except Exception:  # noqa: BLE001
+        return False, "http://127.0.0.1:11434", "qwen2.5vl:7b"
+
+
+def _vision_qa_single_png(path: Path, *, base_url: str, model: str) -> dict[str, Any]:
+    """Hard QA via Ollama vision; returns parsed JSON fields."""
+    from aivp.llm.ollama_vision_client import OllamaVisionClient
+
+    client = OllamaVisionClient(base_url, model, timeout=120.0)
+    raw = client.complete_json_with_image(_VISION_QA_SYSTEM, _VISION_QA_USER, path)
+    return {
+        "path": str(path.resolve()),
+        "has_action": bool(raw.get("has_action")),
+        "has_multiple_people": bool(raw.get("has_multiple_people")),
+        "has_dock_or_waterfront": bool(raw.get("has_dock_or_waterfront")),
+        "brief": str(raw.get("brief") or ""),
+        "raw": raw,
+    }
+
+
+def _ollama_vision_qa(
+    png_paths: list[Path],
+    *,
+    action_shot: bool,
+) -> dict[str, Any]:
+    """Vision QA for keyframe PNGs; hard-fails action shots when Ollama is up."""
+    out: dict[str, Any] = {
+        "available": False,
+        "skipped": False,
+        "results": [],
+        "hard_fail": False,
+        "warnings": [],
+    }
     if not png_paths:
         return out
-    try:
-        import base64
 
-        path = png_paths[0]
-        if not path.exists():
+    skip_env = os.environ.get("AIVP_SKIP_VISION_QA", "").strip() in ("1", "true", "yes")
+    available, base_url, model = _ollama_vision_available()
+    out["available"] = available
+    out["model"] = model
+    out["base_url"] = base_url
+
+    existing = [p for p in png_paths if p.exists()]
+    if not existing:
+        out["warnings"].append("no_pngs_for_vision_qa")
+        if action_shot and not skip_env:
+            out["hard_fail"] = True
+        return out
+
+    if not available:
+        msg = "vision_unavailable: Ollama vision model not reachable"
+        out["warnings"].append(msg)
+        print(f"WARNING: {msg}", file=sys.stderr)
+        if skip_env:
+            out["skipped"] = True
+            out["warnings"].append("vision_qa_skipped_via_AIVP_SKIP_VISION_QA")
             return out
-        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-        body = {
-            "model": "llava",
-            "prompt": (
-                "Does this image show a fight or combat on a dock/pier with multiple people? "
-                "Answer yes or no and one short reason."
-            ),
-            "images": [b64],
-            "stream": False,
-        }
-        req = urllib.request.Request(
-            "http://127.0.0.1:11434/api/generate",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        out["available"] = True
-        answer = str(payload.get("response") or "").strip()
-        out["response"] = answer
-        if answer and answer.lower().startswith("no"):
-            out["warnings"].append(f"vision_qa_negative:{answer[:120]}")
-    except Exception as e:  # noqa: BLE001
-        out["error"] = str(e)
+        if action_shot:
+            out["hard_fail"] = True
+        return out
+
+    for path in existing:
+        try:
+            result = _vision_qa_single_png(path, base_url=base_url, model=model)
+            out["results"].append(result)
+        except Exception as e:  # noqa: BLE001
+            err = {"path": str(path.resolve()), "error": str(e)}
+            out["results"].append(err)
+            out["warnings"].append(f"vision_qa_error:{path.name}:{e}")
+            if action_shot:
+                out["hard_fail"] = True
+
+    if action_shot and out["results"]:
+        for result in out["results"]:
+            if result.get("error"):
+                continue
+            if not result.get("has_action") or not result.get("has_multiple_people"):
+                out["hard_fail"] = True
+                out["warnings"].append(
+                    f"vision_qa_action_fail:{Path(result['path']).name}:"
+                    f"has_action={result.get('has_action')},"
+                    f"has_multiple_people={result.get('has_multiple_people')},"
+                    f"brief={result.get('brief', '')[:80]}"
+                )
+
     return out
 
 
@@ -434,10 +526,18 @@ def main() -> int:
         else:
             report["assertions"]["pngs_non_white"] = any(m.get("non_white") for m in png_meta)
 
-    vision = _ollama_vision_qa([p for p in paths if p.exists()])
+    vision = _ollama_vision_qa(
+        [p for p in paths if p.exists()],
+        action_shot=_is_action_shot(project_id, shot_id),
+    )
     report["vision_qa"] = vision
     if vision.get("warnings"):
         report["vision_qa_warnings"] = vision["warnings"]
+    if vision.get("hard_fail"):
+        failures.append("vision_qa_hard_fail")
+        report["assertions"]["vision_qa_pass"] = False
+    else:
+        report["assertions"]["vision_qa_pass"] = True
 
     report["prompt_full"] = prompt
     report["prompt_head_200"] = prompt[:200]

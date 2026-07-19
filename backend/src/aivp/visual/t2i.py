@@ -272,6 +272,7 @@ def generate_shot_with_loras(
     character_look: str = "full",
     prompt_order: str = "identity_first",
     max_character_lora_strength: float | None = None,
+    character_lora_strength: float | None = None,
     settings=None,
 ) -> dict[str, Any]:
     """Txt2img with optional location LoRA first, then character LoRAs stacked."""
@@ -329,13 +330,20 @@ def generate_shot_with_loras(
                     c_lora,
                     settings=settings,
                 )
-                strength = float(
-                    profile.get("lora_weight_default") or DEFAULT_LORA_WEIGHT
-                )
-                # Keyframes use minimal look; slightly lower LoRA so scene/env wins.
-                if character_look == "minimal":
-                    cap = max_character_lora_strength if max_character_lora_strength is not None else 0.65
-                    strength = max(0.45, min(strength, cap))
+                if character_lora_strength is not None:
+                    strength = float(character_lora_strength)
+                else:
+                    strength = float(
+                        profile.get("lora_weight_default") or DEFAULT_LORA_WEIGHT
+                    )
+                    # Keyframes use minimal look; slightly lower LoRA so scene/env wins.
+                    if character_look == "minimal":
+                        cap = (
+                            max_character_lora_strength
+                            if max_character_lora_strength is not None
+                            else 0.65
+                        )
+                        strength = max(0.45, min(strength, cap))
                 loras.append(
                     {
                         "name": c_lora,

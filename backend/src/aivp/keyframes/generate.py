@@ -46,7 +46,23 @@ _SHOT_SIZE_FRAMING: dict[str, str] = {
 _KEYFRAME_ACTION_NEGATIVE = (
     "portrait, solo character, standing still, looking at viewer, facing camera, "
     "character lineup, group photo, static pose, neutral pose, A-pose, "
-    "character reference, bust shot, headshot"
+    "character reference, bust shot, headshot, "
+    "formal portrait, silhouette portrait, solo 1person, peaceful background, centered composition"
+)
+
+_ACTION_ATTACK_KEYWORDS = (
+    "挥刀",
+    "攻击",
+    "倒地",
+    "冲出",
+    "打斗",
+    "战斗",
+    "厮杀",
+)
+
+_ACTION_SCENE_LOCK = (
+    "dynamic action scene, multiple people, sword attack in progress, wounded man falling, "
+    "chaotic crowd, wooden pier dock riverside, guofeng anime cinematic still"
 )
 
 _KEYFRAME_SHEET_NEGATIVE = (
@@ -111,7 +127,14 @@ def _scene_text_for_framing(shot: dict[str, Any]) -> str:
 
 def _is_action_scene(shot: dict[str, Any]) -> bool:
     text = _scene_text_for_framing(shot)
+    if any(m in text for m in _ACTION_ATTACK_KEYWORDS):
+        return True
     return any(m in text for m in _ACTION_FRAMING_MARKERS)
+
+
+def _is_attack_action_scene(shot: dict[str, Any]) -> bool:
+    text = _scene_text_for_framing(shot)
+    return any(m in text for m in _ACTION_ATTACK_KEYWORDS)
 
 
 def _has_dock_setting(shot: dict[str, Any]) -> bool:
@@ -187,6 +210,7 @@ def _build_keyframe_prompt(shot: dict[str, Any], *, override: str = "") -> str:
         action = ""
 
     action_scene = _is_action_scene(shot)
+    attack_scene = _is_attack_action_scene(shot)
     if action_scene and action:
         scene_bits = [action]
         if visual and visual not in action:
@@ -195,6 +219,9 @@ def _build_keyframe_prompt(shot: dict[str, Any], *, override: str = "") -> str:
         scene_bits = [visual]
         if action and action not in visual:
             scene_bits.append(action)
+
+    if attack_scene:
+        scene_bits = [_ACTION_SCENE_LOCK] + scene_bits
 
     framing = _shot_framing_tokens(shot)
     parts = [b for b in scene_bits + [framing] if b]
@@ -469,7 +496,14 @@ def generate_keyframes(
     candidates: list[dict[str, str]] = []
     last_out: dict[str, Any] | None = None
     final_prompt = prompt
-    max_char_lora = 0.45 if len(stacked_character_ids) >= 2 else None
+    attack_scene = _is_attack_action_scene(shot)
+    multi_cast = len(stacked_character_ids) >= 2
+    char_lora_strength: float | None = None
+    max_char_lora: float | None = None
+    if attack_scene and multi_cast:
+        char_lora_strength = 0.35
+    elif multi_cast:
+        max_char_lora = 0.45
     for _ in range(count):
         out = generate_shot_with_loras(
             vpaths,
@@ -483,6 +517,7 @@ def generate_keyframes(
             character_look="minimal",
             prompt_order="scene_first",
             max_character_lora_strength=max_char_lora,
+            character_lora_strength=char_lora_strength,
             settings=settings,
         )
         last_out = out
